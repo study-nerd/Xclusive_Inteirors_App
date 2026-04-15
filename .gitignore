@@ -1,0 +1,10 @@
+node_modules/
+.env
+dist/
+uploads/dpr-images/*
+uploads/dpr-voice/*
+uploads/po-pdfs/*
+uploads/snag-images/*
+!uploads/.gitkeep
+*.log
+.DS_Store
