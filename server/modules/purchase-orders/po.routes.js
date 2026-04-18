@@ -33,6 +33,8 @@ router.get('/:id/pdf',       c.downloadPdf);
 router.delete('/:id',        authorize('admin'), c.hardDelete);
 
 // ── Goods Receipt ─────────────────────────────────────────
-router.post('/:id/receipt',  c.submitGoodsReceipt);
+router.post('/:id/receipt',        c.challanImageUpload, c.submitGoodsReceipt);
+router.post('/:id/verify-receipt', authorize('admin'), c.verifyReceipt);
+router.get('/:id/receipt-pdf',     c.downloadReceiptPdf);
 
 module.exports = router;

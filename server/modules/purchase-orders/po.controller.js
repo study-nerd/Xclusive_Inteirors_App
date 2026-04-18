@@ -1,5 +1,5 @@
 const db = require('../../config/db');
-const { generatePOPdf } = require('../../utils/pdf');
+const { generatePOPdf, generateReceiptPdf } = require('../../utils/pdf');
 const { sendPOEmail } = require('../../utils/email');
 const path = require('path');
 const fs = require('fs');
@@ -31,6 +31,9 @@ const VENDOR_TO_ELEMENT_CATEGORIES = {
 const PO_ITEM_DIR = path.join(__dirname, '../../uploads/po-items');
 if (!fs.existsSync(PO_ITEM_DIR)) fs.mkdirSync(PO_ITEM_DIR, { recursive: true });
 
+const CHALLAN_DIR = path.join(__dirname, '../../uploads/challans');
+if (!fs.existsSync(CHALLAN_DIR)) fs.mkdirSync(CHALLAN_DIR, { recursive: true });
+
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const lineItemStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, PO_ITEM_DIR),
@@ -51,6 +54,26 @@ const lineItemImagesUpload = (req, res, next) => {
     if (err) {
       return res.status(400).json({ success: false, message: err.message });
     }
+    next();
+  });
+};
+
+const ALLOWED_CHALLAN_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
+const challanStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, CHALLAN_DIR),
+  filename: (req, file, cb) => cb(null, `${uuidv4()}${path.extname(file.originalname)}`),
+});
+const challanUpload = multer({
+  storage: challanStorage,
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => {
+    if (ALLOWED_CHALLAN_TYPES.has(file.mimetype)) return cb(null, true);
+    return cb(new Error('Only JPG, PNG, WEBP, or PDF allowed for challan'));
+  },
+});
+const challanImageUpload = (req, res, next) => {
+  challanUpload.single('challan')(req, res, (err) => {
+    if (err) return res.status(400).json({ success: false, message: err.message });
     next();
   });
 };
@@ -80,13 +103,15 @@ const fetchFullPO = async (id) => {
       v.bank_ifsc AS vendor_bank_ifsc, v.bank_name AS vendor_bank_name,
       u.name AS poc_name, u.email AS poc_email,
       creator.name AS created_by_name, creator.email AS created_by_email,
-      submitter.name AS receipt_submitted_by_name
+      submitter.name AS receipt_submitted_by_name,
+      verifier.name AS receipt_verified_by_name
     FROM purchase_orders po
     LEFT JOIN projects p       ON p.id  = po.project_id
     LEFT JOIN vendors v        ON v.id  = po.vendor_id
     LEFT JOIN users u          ON u.id  = po.order_poc_user_id
     LEFT JOIN users creator    ON creator.id = po.created_by
     LEFT JOIN users submitter  ON submitter.id = po.receipt_submitted_by
+    LEFT JOIN users verifier   ON verifier.id = po.receipt_verified_by
     WHERE po.id = $1`, [id]);
 
   if (!rows[0]) return null;
@@ -192,6 +217,7 @@ const list = async (req, res) => {
   if (vendor_id)  { q += ` AND po.vendor_id = $${idx++}`; params.push(vendor_id); }
   if (status)     { q += ` AND po.status = $${idx++}`; params.push(status); }
   if (created_by) { q += ` AND po.created_by = $${idx++}`; params.push(created_by); }
+  if (req.user.role === 'admin') { q += ` AND po.status != 'draft'`; }
   q += ' ORDER BY po.created_at DESC';
   const { rows } = await db.query(q, params);
   res.json({ success: true, data: rows });
@@ -413,11 +439,18 @@ const hardDelete = async (req, res) => {
 
 // ── Goods Receipt ─────────────────────────────────────────
 const submitGoodsReceipt = async (req, res) => {
-  const { items } = req.body;
-  // items = [{ line_item_id, received_qty, side_note }]
+  // Support both JSON body and multipart/form-data (items as JSON string)
+  let items = req.body.items;
+  if (typeof items === 'string') {
+    try { items = JSON.parse(items); } catch { items = []; }
+  }
 
   if (!items?.length) {
     return res.status(400).json({ success: false, message: 'No items provided' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ success: false, message: 'Challan image is required' });
   }
 
   const po = await fetchFullPO(req.params.id);
@@ -426,19 +459,28 @@ const submitGoodsReceipt = async (req, res) => {
     return res.status(400).json({ success: false, message: 'Can only submit receipt for approved POs' });
   }
 
-  // Validate: side note required when received_qty != po qty
+  if (po.created_by !== req.user.id) {
+    return res.status(403).json({ success: false, message: 'Only the PO creator can submit goods receipt' });
+  }
+
+  // Validate side notes; null out side_note when quantities match
   for (const item of items) {
     const lineItem = po.line_items.find(li => li.id === item.line_item_id);
     if (!lineItem) continue;
-    const poQty = parseFloat(lineItem.quantity);
+    const poQty   = parseFloat(lineItem.quantity);
     const recvQty = parseFloat(item.received_qty);
     if (!isNaN(recvQty) && recvQty !== poQty && !item.side_note?.trim()) {
       return res.status(400).json({
         success: false,
-        message: `Side note required for item "${lineItem.item_name}" — received quantity (${recvQty}) differs from PO quantity (${poQty})`,
+        message: `Side note required for "${lineItem.item_name}" — received (${recvQty}) differs from PO qty (${poQty})`,
       });
     }
+    if (!isNaN(recvQty) && recvQty === poQty) {
+      item.side_note = null;
+    }
   }
+
+  const challanUrl = `/uploads/challans/${req.file.filename}`;
 
   const client = await db.pool.connect();
   try {
@@ -446,22 +488,28 @@ const submitGoodsReceipt = async (req, res) => {
 
     for (const item of items) {
       await client.query(
-        `INSERT INTO po_goods_receipt (po_id, line_item_id, received_qty, side_note, submitted_by)
-         VALUES ($1,$2,$3,$4,$5)
+        `INSERT INTO po_goods_receipt (po_id, line_item_id, received_qty, side_note, submitted_by, challan_image_url)
+         VALUES ($1,$2,$3,$4,$5,$6)
          ON CONFLICT (po_id, line_item_id) DO UPDATE SET
-           received_qty  = EXCLUDED.received_qty,
-           side_note     = EXCLUDED.side_note,
-           submitted_by  = EXCLUDED.submitted_by,
-           submitted_at  = NOW()`,
-        [req.params.id, item.line_item_id, item.received_qty, item.side_note || null, req.user.id]
+           received_qty       = EXCLUDED.received_qty,
+           side_note          = EXCLUDED.side_note,
+           submitted_by       = EXCLUDED.submitted_by,
+           challan_image_url  = EXCLUDED.challan_image_url,
+           submitted_at       = NOW()`,
+        [req.params.id, item.line_item_id, item.received_qty, item.side_note || null, req.user.id, challanUrl]
       );
     }
 
     await client.query(
       `UPDATE purchase_orders SET
-         receipt_submitted=true, receipt_submitted_at=NOW(), receipt_submitted_by=$1
-       WHERE id=$2`,
-      [req.user.id, req.params.id]
+         receipt_submitted     = true,
+         receipt_submitted_at  = NOW(),
+         receipt_submitted_by  = $1,
+         receipt_status        = 'pending',
+         receipt_challan_url   = $2,
+         updated_at            = NOW()
+       WHERE id = $3`,
+      [req.user.id, challanUrl, req.params.id]
     );
 
     await client.query('COMMIT');
@@ -472,33 +520,129 @@ const submitGoodsReceipt = async (req, res) => {
     client.release();
   }
 
-  // Check for discrepancies and notify admins
+  // Notify admins of new receipt submission
+  const { rows: admins } = await db.query(
+    'SELECT id FROM users WHERE role=$1 AND is_active=true', ['admin']
+  );
+
+  // Check for discrepancies
   const discrepancies = items.filter(item => {
     const lineItem = po.line_items.find(li => li.id === item.line_item_id);
     if (!lineItem) return false;
     return parseFloat(item.received_qty) !== parseFloat(lineItem.quantity);
   });
 
-  if (discrepancies.length > 0) {
-    const { rows: admins } = await db.query(
-      'SELECT id FROM users WHERE role=$1 AND is_active=true', ['admin']
-    );
-    for (const admin of admins) {
+  for (const admin of admins) {
+    if (discrepancies.length > 0) {
       await db.query(
         `INSERT INTO notifications (user_id, type, title, body, po_id)
          VALUES ($1,'discrepancy',$2,$3,$4)`,
         [
           admin.id,
           `⚠️ Quantity discrepancy: ${po.po_number}`,
-          `Goods receipt for ${po.po_number} has ${discrepancies.length} item(s) with quantity discrepancies. Review the PO for details.`,
+          `Goods receipt for ${po.po_number} has ${discrepancies.length} item(s) with discrepancies. Verify before approving.`,
+          po.id,
+        ]
+      );
+    } else {
+      await db.query(
+        `INSERT INTO notifications (user_id, type, title, body, po_id)
+         VALUES ($1,'receipt_pending',$2,$3,$4)`,
+        [
+          admin.id,
+          `📋 Receipt pending verification: ${po.po_number}`,
+          `Goods receipt for ${po.po_number} has been submitted and awaits your verification.`,
           po.id,
         ]
       );
     }
   }
 
+  // Late submission notification
+  if (po.approved_at) {
+    const diffDays = Math.floor((Date.now() - new Date(po.approved_at)) / (1000 * 60 * 60 * 24));
+    if (diffDays > 8) {
+      const delay = diffDays - 8;
+      for (const admin of admins) {
+        await db.query(
+          `INSERT INTO notifications (user_id, type, title, body, po_id)
+           VALUES ($1,'late_receipt',$2,$3,$4)`,
+          [
+            admin.id,
+            `⏰ Late Receipt: ${po.po_number}`,
+            `Goods receipt for PO ${po.po_number} was submitted ${delay} day(s) late.`,
+            po.id,
+          ]
+        );
+      }
+    }
+  }
+
   const full = await fetchFullPO(req.params.id);
   res.json({ success: true, data: full });
+};
+
+// ── Verify / Reject Receipt (Admin) ──────────────────────
+const verifyReceipt = async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body; // 'verified' | 'rejected'
+
+  if (!['verified', 'rejected'].includes(status)) {
+    return res.status(400).json({ success: false, message: "Status must be 'verified' or 'rejected'" });
+  }
+
+  const { rows } = await db.query(
+    `UPDATE purchase_orders
+     SET receipt_status       = $1,
+         receipt_verified_at  = NOW(),
+         receipt_verified_by  = $2,
+         updated_at           = NOW()
+     WHERE id = $3 AND receipt_submitted = true
+     RETURNING *`,
+    [status, req.user.id, id]
+  );
+
+  if (!rows[0]) {
+    return res.status(400).json({ success: false, message: 'Receipt not found or not yet submitted' });
+  }
+
+  const po = rows[0];
+  const icon = status === 'verified' ? '✅' : '❌';
+  const verb = status === 'verified' ? 'verified' : 'rejected';
+
+  await db.query(
+    `INSERT INTO notifications (user_id, type, title, body, po_id)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [
+      po.created_by,
+      `receipt_${status}`,
+      `${icon} Receipt ${verb}: ${po.po_number}`,
+      `Your goods receipt for ${po.po_number} has been ${verb} by admin.`,
+      po.id,
+    ]
+  );
+
+  const full = await fetchFullPO(id);
+  return res.json({ success: true, message: `Receipt ${verb}`, data: full });
+};
+
+// ── Download Receipt PDF (only after verified) ────────────
+const downloadReceiptPdf = async (req, res) => {
+  const po = await fetchFullPO(req.params.id);
+  if (!po) return res.status(404).json({ success: false, message: 'PO not found' });
+
+  if (po.receipt_status !== 'verified') {
+    return res.status(400).json({ success: false, message: 'Receipt not yet verified by admin' });
+  }
+
+  try {
+    const pdfPath = await generateReceiptPdf(po);
+    const safeFilename = `${po.po_number.replace(/\//g, '-')}-receipt.pdf`;
+    res.download(pdfPath, safeFilename);
+  } catch (err) {
+    console.error('Receipt PDF error:', err);
+    res.status(500).json({ success: false, message: `PDF generation failed: ${err.message}` });
+  }
 };
 
 
@@ -570,7 +714,8 @@ const _recalcTotals = async (poId) => {
 
 module.exports = {
   list, getOne, create, update, submit, approve, reject,
-  downloadPdf, hardDelete, submitGoodsReceipt,
+  downloadPdf, hardDelete,
+  submitGoodsReceipt, challanImageUpload, verifyReceipt, downloadReceiptPdf,
   getVendorsByElementCategory, getElementsByVendorCategory,
   lineItemImagesUpload, uploadLineItemImages,
 };

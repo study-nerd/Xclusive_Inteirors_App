@@ -21,6 +21,8 @@ export default function PODetailPage() {
   const [receiptItems,   setReceiptItems]   = useState({})   // { [line_item_id]: { received_qty, side_note } }
   const [receiptError,   setReceiptError]   = useState('')
   const [imagePreview,   setImagePreview]   = useState('')
+  const [challanFile,    setChallanFile]    = useState(null)
+  const [challanError,   setChallanError]   = useState('')
 
   const { data: po, isLoading, isError, error } = useQuery({
     queryKey: ['po', id],
@@ -46,9 +48,16 @@ export default function PODetailPage() {
     onError: (err) => alert(err.response?.data?.message || 'Delete failed'),
   })
   const receiptMutation = useMutation({
-    mutationFn: (items) => api.post(`/purchase-orders/${id}/receipt`, { items }),
-    onSuccess: () => { qc.invalidateQueries(['po', id]); setReceiptError('') },
+    mutationFn: (formData) => api.post(`/purchase-orders/${id}/receipt`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
+    onSuccess: () => { qc.invalidateQueries(['po', id]); setReceiptError(''); setChallanFile(null) },
     onError: (err) => setReceiptError(err.response?.data?.message || 'Failed to submit receipt'),
+  })
+  const verifyReceiptMutation = useMutation({
+    mutationFn: (status) => api.post(`/purchase-orders/${id}/verify-receipt`, { status }),
+    onSuccess: () => qc.invalidateQueries(['po', id]),
+    onError: (err) => alert(err.response?.data?.message || 'Verification failed'),
   })
 
   const handleDownload = async () => {
@@ -60,14 +69,31 @@ export default function PODetailPage() {
     a.click()
   }
 
+  const handleDownloadReceiptPdf = async () => {
+    const res = await api.get(`/purchase-orders/${id}/receipt-pdf`, { responseType: 'blob' })
+    const url = URL.createObjectURL(new Blob([res.data]))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${po.po_number.replace(/\//g, '-')}-receipt.pdf`
+    a.click()
+  }
+
   const handleSubmitReceipt = () => {
     setReceiptError('')
+    setChallanError('')
+    if (!challanFile) {
+      setChallanError('Challan image is required')
+      return
+    }
     const items = (po.line_items || []).map(li => ({
       line_item_id: li.id,
       received_qty: receiptItems[li.id]?.received_qty ?? li.received_qty ?? li.quantity,
       side_note:    receiptItems[li.id]?.side_note    ?? li.receipt_note ?? '',
     }))
-    receiptMutation.mutate(items)
+    const formData = new FormData()
+    formData.append('items', JSON.stringify(items))
+    formData.append('challan', challanFile)
+    receiptMutation.mutate(formData)
   }
 
   const setReceiptField = (lineItemId, field, value) => {
@@ -92,8 +118,8 @@ export default function PODetailPage() {
   const isOwner    = po.created_by === user?.id
   const canEdit    = isDraft || (isAdmin && isPending)
 
-  // Can submit receipt: PO creator + managers + admins, only when approved
-  const canSubmitReceipt = isApproved && (isOwner || isManager || isAdmin)
+  // Only PO creator can submit receipt; allow resubmission after admin rejection
+  const canSubmitReceipt = isApproved && isOwner && (!po.receipt_submitted || po.receipt_status === 'rejected')
 
   const categoryTotals = {}
   for (const item of po.line_items || []) {
@@ -146,6 +172,11 @@ export default function PODetailPage() {
                 <Download size={15} className="mr-2" />Download PDF
               </Button>
             )}
+            {po.receipt_status === 'verified' && (
+              <Button variant="outline" onClick={handleDownloadReceiptPdf}>
+                <Download size={15} className="mr-2" />Receipt PDF
+              </Button>
+            )}
             {isAdmin && (
               <Button variant="outline" className="text-red-600 border-red-300 hover:bg-red-50"
                 onClick={() => setDeleteModal(true)}>
@@ -158,7 +189,10 @@ export default function PODetailPage() {
 
       <div className="flex items-center gap-3 mb-6 flex-wrap">
         <StatusBadge status={po.status} />
-        {po.receipt_submitted && <Badge variant="success"><ClipboardCheck size={12} className="mr-1" />Receipt submitted</Badge>}
+        {po.receipt_submitted && po.receipt_status === 'pending'   && <Badge variant="warning"  className="bg-yellow-100 text-yellow-800 border-yellow-300"><ClipboardCheck size={12} className="mr-1" />Receipt pending verification</Badge>}
+        {po.receipt_submitted && po.receipt_status === 'verified'  && <Badge variant="success"  className="bg-green-100 text-green-800 border-green-300"><ClipboardCheck size={12} className="mr-1" />Receipt verified</Badge>}
+        {po.receipt_submitted && po.receipt_status === 'rejected'  && <Badge variant="destructive" className="bg-red-100 text-red-800 border-red-300"><ClipboardCheck size={12} className="mr-1" />Receipt rejected — resubmit required</Badge>}
+        {po.receipt_submitted && !po.receipt_status                && <Badge variant="success"><ClipboardCheck size={12} className="mr-1" />Receipt submitted</Badge>}
         {po.email_sent && <Badge variant="success">✉ Email sent to vendor</Badge>}
         {po.admin_comment && <span className="text-sm text-red-600">Rejection reason: {po.admin_comment}</span>}
         <span className="text-sm text-muted-foreground">Created by: <span className="font-medium text-foreground">{po.created_by_name || '???'}</span></span>
@@ -340,12 +374,27 @@ export default function PODetailPage() {
           </div>
         </div>
 
-        {/* Goods receipt submit button */}
-        {isApproved && canSubmitReceipt && !po.receipt_submitted && (
-          <div className="px-4 pb-4 border-t pt-4">
-            {receiptError && (
-              <div className="mb-3 p-3 bg-red-50 border border-red-200 text-red-700 rounded text-sm">{receiptError}</div>
+        {/* Goods receipt submit section */}
+        {canSubmitReceipt && (
+          <div className="px-4 pb-4 border-t pt-4 space-y-3">
+            {po.receipt_status === 'rejected' && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded text-sm">
+                Your previous receipt was rejected by admin. Please review quantities and resubmit with a new challan.
+              </div>
             )}
+            {receiptError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded text-sm">{receiptError}</div>
+            )}
+            <div>
+              <Label className="text-sm font-medium">Challan Image <span className="text-red-500">*</span></Label>
+              <Input
+                type="file"
+                accept="image/jpeg,image/png,image/webp,application/pdf"
+                className="mt-1"
+                onChange={e => { setChallanFile(e.target.files[0] || null); setChallanError('') }}
+              />
+              {challanError && <p className="text-xs text-red-600 mt-1">{challanError}</p>}
+            </div>
             <div className="flex items-center gap-3">
               <Button
                 onClick={handleSubmitReceipt}
@@ -357,9 +406,54 @@ export default function PODetailPage() {
                   : <><ClipboardCheck size={15} className="mr-2" />Submit Goods Receipt</>}
               </Button>
               <span className="text-xs text-muted-foreground">
-                Fill in received quantities above. Side note is required where quantities differ.
+                Fill in received quantities above. Side note required where quantities differ.
               </span>
             </div>
+          </div>
+        )}
+
+        {/* Admin: verify or reject submitted receipt */}
+        {isAdmin && po.receipt_submitted && po.receipt_status === 'pending' && (
+          <div className="px-4 pb-4 border-t pt-4">
+            <div className="text-sm font-medium mb-3">Verify Goods Receipt</div>
+            {po.receipt_challan_url && (
+              <div className="mb-3">
+                <span className="text-xs text-muted-foreground">Challan:</span>
+                <a
+                  href={po.receipt_challan_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="ml-2 text-xs text-blue-600 underline"
+                >
+                  View challan
+                </a>
+              </div>
+            )}
+            <div className="flex gap-3">
+              <Button
+                className="bg-green-600 hover:bg-green-700"
+                onClick={() => verifyReceiptMutation.mutate('verified')}
+                disabled={verifyReceiptMutation.isPending}
+              >
+                {verifyReceiptMutation.isPending ? <Spinner className="mr-2" /> : <CheckCircle size={15} className="mr-2" />}
+                Verify Receipt
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => verifyReceiptMutation.mutate('rejected')}
+                disabled={verifyReceiptMutation.isPending}
+              >
+                <XCircle size={15} className="mr-2" />Reject Receipt
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Show verification info once verified */}
+        {po.receipt_status === 'verified' && po.receipt_verified_by_name && (
+          <div className="px-4 pb-4 border-t pt-3 text-xs text-muted-foreground">
+            Verified by <span className="font-medium text-foreground">{po.receipt_verified_by_name}</span>
+            {po.receipt_verified_at && ` on ${new Date(po.receipt_verified_at).toLocaleDateString('en-IN')}`}
           </div>
         )}
       </Card>

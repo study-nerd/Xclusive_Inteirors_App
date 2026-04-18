@@ -221,4 +221,139 @@ const buildPOHtml = (po) => {
 </html>`;
 };
 
-module.exports = { generatePOPdf };
+const generateReceiptPdf = async (po) => {
+  const outputDir = path.join(__dirname, '../uploads/receipt-pdfs');
+  if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+
+  const safeFilename = po.po_number.replace(/\//g, '-');
+  const outputPath = path.join(outputDir, `${safeFilename}-receipt.pdf`);
+
+  const html = buildReceiptHtml(po);
+
+  const browser = await puppeteer.launch({
+    headless: true,
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+  });
+
+  try {
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+    await page.pdf({
+      path: outputPath,
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '15mm', right: '15mm', bottom: '15mm', left: '15mm' },
+    });
+  } finally {
+    await browser.close();
+  }
+
+  return outputPath;
+};
+
+const buildReceiptHtml = (po) => {
+  const company = {
+    name:    process.env.COMPANY_NAME    || 'Xclusive Interiors Pvt. Ltd.',
+    address: process.env.COMPANY_ADDRESS || '208, Vision Galleria, Near Kunal Icon, Pimple Saudagar, Pune 411027',
+  };
+
+  const fmt = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+
+  const challanDataUrl = toDataUrl(po.receipt_challan_url);
+
+  const lineItemsHtml = (po.line_items || []).map((item, i) => {
+    const poQty    = parseFloat(item.quantity   || 0);
+    const recvQty  = item.received_qty !== null && item.received_qty !== undefined
+      ? parseFloat(item.received_qty)
+      : null;
+    const hasDisc  = recvQty !== null && recvQty !== poQty;
+    const rowStyle = hasDisc ? 'background:#fffbeb' : '';
+
+    return `
+      <tr style="${rowStyle}">
+        <td>${i + 1}</td>
+        <td>${item.item_name || ''}</td>
+        <td>${item.category_name || ''}</td>
+        <td>${item.unit || ''}</td>
+        <td style="text-align:right">${poQty.toFixed(2)}</td>
+        <td style="text-align:right;${hasDisc ? 'color:#b45309;font-weight:bold' : ''}">${recvQty !== null ? recvQty.toFixed(2) : '—'}</td>
+        <td>${hasDisc ? (item.receipt_note || '') : ''}</td>
+      </tr>`;
+  }).join('');
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"/>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: Arial, sans-serif; font-size: 10px; color: #000; }
+  .page { padding: 10mm; }
+  h1 { font-size: 20px; font-weight: bold; text-align: right; }
+  .po-num { font-size: 13px; text-align: right; }
+  .date { font-size: 11px; text-align: right; }
+  .header-row { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 10px; }
+  .logo { font-size: 18px; font-weight: bold; letter-spacing: 2px; }
+  .logo small { display:block; font-size: 9px; font-weight: normal; letter-spacing: 1px; }
+  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid #ccc; margin-bottom: 10px; }
+  .info-cell { padding: 6px 8px; border: 1px solid #ccc; }
+  .info-cell strong { display: block; margin-bottom: 2px; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+  th { background: #1a1a1a; color: #fff; padding: 5px 4px; text-align: left; font-size: 9px; }
+  td { padding: 4px; border-bottom: 1px solid #eee; font-size: 9px; }
+  .verified-banner { background: #dcfce7; border: 1px solid #86efac; padding: 6px 10px; margin-bottom: 10px; font-size: 10px; color: #166534; }
+  .challan-section { margin-top: 10px; }
+  .challan-section img { max-width: 300px; max-height: 200px; border: 1px solid #ccc; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="header-row">
+    <div class="logo">XCLUSIVE<br/><small>INTERIORS / ARCHITECTURE</small></div>
+    <div>
+      <h1>Goods Receipt</h1>
+      <div class="po-num">${po.po_number}</div>
+      <div class="date">Submitted: ${fmt(po.receipt_submitted_at)}</div>
+    </div>
+  </div>
+
+  <div class="verified-banner">
+    ✅ Verified by: ${po.receipt_verified_by_name || 'Admin'} &nbsp;|&nbsp; ${fmt(po.receipt_verified_at)}
+  </div>
+
+  <div class="info-grid">
+    <div class="info-cell">
+      <strong>Project:</strong> ${po.project_name || ''} (${po.project_code || ''})<br/>
+      <strong>Vendor:</strong> ${po.vendor_name || ''}<br/>
+      <strong>Submitted by:</strong> ${po.receipt_submitted_by_name || ''}
+    </div>
+    <div class="info-cell">
+      <strong>Company:</strong> ${company.name}<br/>
+      <strong>Address:</strong> ${company.address}
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>S.No.</th><th>Item</th><th>Category</th><th>UOM</th>
+        <th style="text-align:right">PO Qty</th>
+        <th style="text-align:right">Received Qty</th>
+        <th>Side Note</th>
+      </tr>
+    </thead>
+    <tbody>${lineItemsHtml}</tbody>
+  </table>
+
+  ${challanDataUrl ? `
+  <div class="challan-section">
+    <strong>Challan:</strong><br/>
+    <img src="${challanDataUrl}" alt="Challan" />
+  </div>` : ''}
+</div>
+</body>
+</html>`;
+};
+
+module.exports = { generatePOPdf, generateReceiptPdf };
