@@ -6,7 +6,7 @@ import useAuthStore from '../../store/authStore'
 import {
   LayoutDashboard, FolderOpen, ShoppingCart, Users2, Package,
   Tag, ClipboardList, AlertTriangle, UserCog, Menu, X, LogOut,
-  Bell, Receipt, User
+  Bell, Receipt, User, ListChecks
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 
@@ -16,7 +16,7 @@ const NAV = [
   { to: '/purchase-orders', label: 'Purchase Orders',  icon: ShoppingCart,    roles: ['admin','manager','employee'] },
   { to: '/vendors',         label: 'Vendors',          icon: Users2,          roles: ['admin','manager','employee'] },
   { to: '/dpr',             label: 'DPR',              icon: ClipboardList,   roles: ['admin','manager','employee'] },
-  { to: '/checklist',       label: 'Checklist',        icon: ClipboardList,   roles: ['admin','manager','employee'] },
+  { to: '/project-tracker', label: 'Project Tracker',  icon: ListChecks,      roles: ['admin','manager','employee'] },
   { to: '/snaglist',        label: 'Snag List',        icon: AlertTriangle,   roles: ['admin','manager','employee'] },
   { to: '/invoices',        label: 'Invoices',         icon: Receipt,         roles: ['admin','manager','employee'] },
   { to: '/elements',        label: 'Elements Master',  icon: Package,         roles: ['admin','manager'] },

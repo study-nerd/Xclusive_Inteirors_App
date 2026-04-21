@@ -155,4 +155,702 @@ const downloadTemplate = (req, res) => {
   res.send(buf);
 };
 
-module.exports = { list, getOne, create, update, updateStatus, hardDelete, addTeamMember, removeTeamMember, upsertContractor, removeContractor, getSchedule, updateScheduleItem, generateSchedule, bulkImport, downloadTemplate };
+// ── Project-type normalizer for template lookup ───────────────
+const TEMPLATE_FALLBACK_MAP = {
+  '3bhk_bungalow': '3BHK', '3bhkbungalow': '3BHK',
+  '4bhk_bungalow': '4BHK', '4bhkbungalow': '4BHK',
+  '5bhk_bungalow': '5BHK', '5bhkbungalow': '5BHK',
+  '6bhk_bungalow': '6BHK', '6bhkbungalow': '6BHK',
+  '6bhk_plus_bungalow': '6BHK', '6bhkplusbungalow': '6BHK',
+  'commercial': '4BHK', 'villa': '4BHK', '1bhk': '2BHK',
+};
+
+const resolveProjectType = async (queryFn, rawType) => {
+  if (!rawType) return null;
+  // Exact match
+  const { rows: e1 } = await queryFn(
+    `SELECT DISTINCT project_type FROM activity_schedule_templates WHERE project_type = $1 AND is_active = true LIMIT 1`,
+    [rawType]
+  );
+  if (e1.length) return rawType;
+  // Case-insensitive + space-normalised match
+  const normalised = rawType.trim().replace(/\s+/g, '');
+  const { rows: e2 } = await queryFn(
+    `SELECT DISTINCT project_type FROM activity_schedule_templates WHERE LOWER(REPLACE(project_type,' ','')) = LOWER($1) AND is_active = true LIMIT 1`,
+    [normalised]
+  );
+  if (e2.length) return e2[0].project_type;
+  // Fallback map
+  const key = rawType.trim().toLowerCase().replace(/\s+/g, '_');
+  const mapped = TEMPLATE_FALLBACK_MAP[key] || TEMPLATE_FALLBACK_MAP[key.replace(/_/g, '')];
+  if (mapped) {
+    const { rows: e3 } = await queryFn(
+      `SELECT DISTINCT project_type FROM activity_schedule_templates WHERE project_type = $1 AND is_active = true LIMIT 1`,
+      [mapped]
+    );
+    if (e3.length) return mapped;
+  }
+  return null;
+};
+
+// ── Audit helper ─────────────────────────────────────────────
+const logAudit = async (client, { userId, userName, action, entityType, entityId, oldData, newData, notes }) => {
+  try {
+    await client.query(
+      `INSERT INTO audit_logs (user_id, user_name, action, entity_type, entity_id, old_data, new_data, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [userId, userName, action, entityType, entityId,
+       oldData ? JSON.stringify(oldData) : null,
+       newData ? JSON.stringify(newData) : null,
+       notes || null]
+    );
+  } catch (e) {
+    console.error('Audit log failed (non-fatal):', e.message);
+  }
+};
+
+// ── Phase → Kanban column mapping (follows master phase order) ──
+const PHASE_TO_COLUMN = {
+  'Furniture Layout':  'Furniture Layout',
+  'Estimation':        'Estimation',
+  '3D Design':         '3D Design',
+  '2D Drawings':       '2D Drawings',
+  'Execution - Civil': 'Execution - Civil',
+  'Execution':         'Execution',
+  'Handover':          'Handover',
+};
+
+// Master phase sequence — used to find the active (first-incomplete) phase
+const PHASE_SEQUENCE = [
+  'Furniture Layout', 'Estimation', '3D Design', '2D Drawings',
+  'Execution - Civil', 'Execution', 'Handover',
+];
+
+const getProjectKanbanColumn = (project, schedule) => {
+  if (project.status === 'completed') return 'Completed';
+  if (!schedule || schedule.length === 0) return 'Not Started';
+
+  const total = schedule.length;
+  const completedList = schedule.filter(s => s.status === 'completed');
+  if (total > 0 && completedList.length === total) return 'Completed';
+
+  // Priority 1: in_progress stages dictate the column
+  const inProgressStages = schedule.filter(s => s.status === 'in_progress');
+  if (inProgressStages.length > 0) {
+    const isHandover = inProgressStages.some(s =>
+      s.phase === 'Handover' || s.milestone_name?.toLowerCase().includes('handover')
+    );
+    if (isHandover) return 'Handover';
+    const maxSortStage = inProgressStages.reduce((a, b) => (a.sort_order > b.sort_order ? a : b));
+    return PHASE_TO_COLUMN[maxSortStage.phase] || 'Execution';
+  }
+
+  // Priority 2: no in_progress → find the FIRST phase (in master order) that has
+  // any non-completed stages. This correctly places the card in the phase being
+  // worked on next, even when we just bulk-completed prior phases via drag/drop.
+  for (const phase of PHASE_SEQUENCE) {
+    const phaseStages = schedule.filter(s => s.phase === phase);
+    if (phaseStages.length > 0 && phaseStages.some(s => s.status !== 'completed')) {
+      return PHASE_TO_COLUMN[phase] || phase;
+    }
+  }
+
+  // Priority 3: all known phases done — check unknown phases by sort_order
+  if (completedList.length > 0) {
+    const maxSortStage = completedList.reduce((a, b) => (a.sort_order > b.sort_order ? a : b));
+    return PHASE_TO_COLUMN[maxSortStage.phase] || 'Execution';
+  }
+
+  return 'Not Started';
+};
+
+// ── Project Tracker ─────────────────────────────────────────
+const getTrackerData = async (req, res) => {
+  const { status, location, project_type, services_taken, team_member } = req.query;
+
+  let q = `SELECT p.*,
+    (SELECT COUNT(*) FROM purchase_orders WHERE project_id = p.id) AS po_count,
+    (SELECT COUNT(*) FROM dprs         WHERE project_id = p.id) AS dpr_count,
+    (SELECT COUNT(*) FROM snags WHERE project_id = p.id AND status != 'resolved') AS open_snag_count,
+    (SELECT json_agg(json_build_object('id',u.id,'name',u.name,'role',u.role))
+       FROM project_team pt JOIN users u ON u.id = pt.user_id
+       WHERE pt.project_id = p.id) AS team_members
+  FROM projects p WHERE 1=1`;
+
+  const params = [];
+  let idx = 1;
+
+  if (status) { q += ` AND p.status = $${idx++}`; params.push(status); }
+  if (location) { q += ` AND LOWER(p.location) LIKE $${idx++}`; params.push(`%${location.toLowerCase()}%`); }
+  if (project_type) { q += ` AND p.project_type = $${idx++}`; params.push(project_type); }
+  if (services_taken) { q += ` AND p.services_taken = $${idx++}`; params.push(services_taken); }
+  if (team_member) {
+    q += ` AND EXISTS (SELECT 1 FROM project_team pt WHERE pt.project_id = p.id AND pt.user_id = $${idx++})`;
+    params.push(team_member);
+  }
+
+  q += ' ORDER BY p.created_at DESC';
+  const { rows: projects } = await db.query(q, params);
+
+  // Fetch schedules for all projects in one query
+  const projectIds = projects.map(p => p.id);
+  let schedulesByProject = {};
+
+  if (projectIds.length > 0) {
+    const { rows: schedules } = await db.query(
+      `SELECT project_id, phase, status, sort_order, milestone_name,
+              weight, planned_start_date, planned_end_date, actual_start_date, actual_end_date
+       FROM project_activity_schedule
+       WHERE project_id = ANY($1::uuid[])
+       ORDER BY project_id, sort_order ASC`,
+      [projectIds]
+    );
+    for (const s of schedules) {
+      if (!schedulesByProject[s.project_id]) schedulesByProject[s.project_id] = [];
+      schedulesByProject[s.project_id].push(s);
+    }
+  }
+
+  const enriched = projects.map(p => {
+    const schedule = schedulesByProject[p.id] || [];
+    const total = schedule.length;
+    const completedStages = schedule.filter(s => s.status === 'completed');
+    const hasTotalWeight = schedule.some(s => s.weight && parseFloat(s.weight) !== 1);
+
+    let progress = 0;
+    if (total > 0) {
+      if (hasTotalWeight) {
+        const tw = schedule.reduce((sum, s) => sum + parseFloat(s.weight || 1), 0);
+        const cw = completedStages.reduce((sum, s) => sum + parseFloat(s.weight || 1), 0);
+        progress = tw > 0 ? Math.round((cw / tw) * 100) : 0;
+      } else {
+        progress = Math.round((completedStages.length / total) * 100);
+      }
+    }
+
+    const currentPhase = schedule.find(s => s.status === 'in_progress')?.phase
+      || completedStages.at(-1)?.phase
+      || null;
+
+    const kanban_column = getProjectKanbanColumn(p, schedule);
+
+    return {
+      ...p,
+      progress,
+      current_phase: currentPhase,
+      kanban_column,
+      total_stages: total,
+      completed_stages: completedStages.length,
+    };
+  });
+
+  // Summary counts
+  const totalActive   = enriched.filter(p => p.status === 'active').length;
+  const inDesign      = enriched.filter(p => ['Estimation','3D Design','2D Drawings'].includes(p.kanban_column)).length;
+  const inExecution   = enriched.filter(p => ['Execution - Civil','Execution'].includes(p.kanban_column)).length;
+  const nearComplete  = enriched.filter(p => p.status === 'active' && p.kanban_column === 'Handover').length;
+
+  res.json({
+    success: true,
+    data: {
+      summary: { totalActive, inDesign, inExecution, nearComplete },
+      projects: enriched,
+    },
+  });
+};
+
+// ── Stage CRUD (wraps project_activity_schedule) ──────────
+const createStage = async (req, res) => {
+  const { title, phase, phase_group, sort_order, weight, planned_start_date, planned_end_date,
+          assigned_to, notes, status } = req.body;
+
+  if (!title) return res.status(400).json({ success: false, message: 'title is required' });
+
+  const { rows: existing } = await db.query(
+    'SELECT MAX(sort_order) AS max_so FROM project_activity_schedule WHERE project_id=$1',
+    [req.params.id]
+  );
+  const nextSort = sort_order !== undefined ? sort_order : (existing[0]?.max_so ?? 0) + 1;
+
+  const { rows } = await db.query(
+    `INSERT INTO project_activity_schedule
+       (project_id, milestone_name, phase, phase_group, sort_order, weight,
+        planned_start_date, planned_end_date, assigned_to, notes, status, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+    [req.params.id, title, phase || null, phase_group || null, nextSort,
+     weight || 1, planned_start_date || null, planned_end_date || null,
+     assigned_to || null, notes || null, status || 'pending', req.user.id]
+  );
+
+  await logAudit(db, {
+    userId: req.user.id, userName: req.user.name,
+    action: 'STAGE_CREATED', entityType: 'stage', entityId: rows[0].id,
+    newData: rows[0],
+  });
+
+  res.status(201).json({ success: true, data: rows[0] });
+};
+
+const updateStage = async (req, res) => {
+  const { milestone_name, phase, phase_group, sort_order, weight, status,
+          planned_start_date, planned_end_date, actual_start_date, actual_end_date,
+          assigned_to, notes, attachment_url } = req.body;
+
+  const { rows: before } = await db.query(
+    'SELECT * FROM project_activity_schedule WHERE id=$1 AND project_id=$2',
+    [req.params.sid, req.params.id]
+  );
+  if (!before[0]) return res.status(404).json({ success: false, message: 'Stage not found' });
+
+  const fields = ['milestone_name','phase','phase_group','sort_order','weight','status',
+    'planned_start_date','planned_end_date','actual_start_date','actual_end_date',
+    'assigned_to','notes','attachment_url','drive_link'];
+  const updates = []; const values = []; let idx = 1;
+
+  const body = { milestone_name, phase, phase_group, sort_order, weight, status,
+    planned_start_date, planned_end_date, actual_start_date, actual_end_date,
+    assigned_to, notes, attachment_url, drive_link: req.body.drive_link };
+
+  for (const f of fields) {
+    if (body[f] !== undefined) { updates.push(`${f} = $${idx++}`); values.push(body[f] ?? null); }
+  }
+
+  if (status === 'completed') { updates.push(`completed_by = $${idx++}`); values.push(req.user.id); }
+  updates.push(`updated_by = $${idx++}`); values.push(req.user.id);
+  updates.push(`updated_at = NOW()`);
+
+  values.push(req.params.sid, req.params.id);
+  const { rows } = await db.query(
+    `UPDATE project_activity_schedule SET ${updates.join(', ')} WHERE id=$${idx} AND project_id=$${idx+1} RETURNING *`,
+    values
+  );
+
+  await logAudit(db, {
+    userId: req.user.id, userName: req.user.name,
+    action: 'STAGE_UPDATED', entityType: 'stage', entityId: rows[0]?.id,
+    oldData: before[0], newData: rows[0],
+  });
+
+  res.json({ success: true, data: rows[0] });
+};
+
+const deleteStage = async (req, res) => {
+  const { rows } = await db.query(
+    'DELETE FROM project_activity_schedule WHERE id=$1 AND project_id=$2 RETURNING *',
+    [req.params.sid, req.params.id]
+  );
+  if (!rows[0]) return res.status(404).json({ success: false, message: 'Stage not found' });
+
+  await logAudit(db, {
+    userId: req.user.id, userName: req.user.name,
+    action: 'STAGE_DELETED', entityType: 'stage', entityId: req.params.sid,
+    oldData: rows[0],
+  });
+
+  res.json({ success: true });
+};
+
+const getStages = async (req, res) => {
+  const { rows: stages } = await db.query(
+    `SELECT pas.*,
+       u.name AS assigned_to_name,
+       cb.name AS created_by_name,
+       co.name AS completed_by_name
+     FROM project_activity_schedule pas
+     LEFT JOIN users u  ON u.id  = pas.assigned_to
+     LEFT JOIN users cb ON cb.id = pas.created_by
+     LEFT JOIN users co ON co.id = pas.completed_by
+     WHERE pas.project_id = $1
+     ORDER BY pas.sort_order ASC, pas.created_at ASC`,
+    [req.params.id]
+  );
+
+  const total = stages.length;
+  const completedCount = stages.filter(s => s.status === 'completed').length;
+  const hasTotalWeight = stages.some(s => s.weight && parseFloat(s.weight) !== 1);
+
+  let progress = 0;
+  if (total > 0) {
+    if (hasTotalWeight) {
+      const tw = stages.reduce((sum, s) => sum + parseFloat(s.weight || 1), 0);
+      const cw = stages.filter(s => s.status === 'completed').reduce((sum, s) => sum + parseFloat(s.weight || 1), 0);
+      progress = tw > 0 ? Math.round((cw / tw) * 100) : 0;
+    } else {
+      progress = Math.round((completedCount / total) * 100);
+    }
+  }
+
+  res.json({ success: true, data: { stages, progress, total, completed: completedCount } });
+};
+
+const applyTemplate = async (req, res) => {
+  const { template_source, template_id, project_type, clear_existing } = req.body;
+
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    if (clear_existing) {
+      await client.query('DELETE FROM project_activity_schedule WHERE project_id=$1', [req.params.id]);
+    }
+
+    const { rows: existing } = await client.query(
+      'SELECT MAX(sort_order) AS max_so FROM project_activity_schedule WHERE project_id=$1',
+      [req.params.id]
+    );
+    let sortOffset = existing[0]?.max_so ?? 0;
+
+    let insertedCount = 0;
+
+    if (template_source === 'activity' && project_type) {
+      // Resolve project_type with normalization + fallbacks
+      const resolvedType = await resolveProjectType(
+        (sql, params) => client.query(sql, params),
+        project_type
+      );
+      if (!resolvedType) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          success: false,
+          message: `No template found for project type "${project_type}". Available types: 2BHK – 6BHK (Bungalow types map to nearest BHK; Commercial maps to 4BHK).`,
+        });
+      }
+
+      const { rows: templates } = await client.query(
+        `SELECT * FROM activity_schedule_templates WHERE project_type=$1 AND is_active=true ORDER BY step_number ASC`,
+        [resolvedType]
+      );
+      if (!templates.length) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: `No template rows found for resolved type "${resolvedType}"` });
+      }
+
+      for (const t of templates) {
+        sortOffset++;
+        await client.query(
+          `INSERT INTO project_activity_schedule
+             (project_id, template_id, activity_no, milestone_name, phase, phase_group, step_number,
+              duration_days, dependency_condition, sort_order, status, weight, created_by)
+           VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,'pending',1,$10)`,
+          [req.params.id, t.id, t.activity_no, t.milestone_name, t.phase, t.step_number,
+           t.duration_days, t.dependency_condition, sortOffset, req.user.id]
+        );
+        insertedCount++;
+      }
+    } else if (template_source === 'custom' && template_id) {
+      // Use user-created stage_templates
+      const { rows: items } = await client.query(
+        `SELECT * FROM stage_template_items WHERE template_id=$1 ORDER BY sort_order ASC`,
+        [template_id]
+      );
+      if (!items.length) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Template has no items' });
+      }
+
+      for (const item of items) {
+        sortOffset++;
+        await client.query(
+          `INSERT INTO project_activity_schedule
+             (project_id, milestone_name, phase, phase_group, sort_order, weight, duration_days, status, created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',$8)`,
+          [req.params.id, item.title, item.phase_group, item.phase_group,
+           sortOffset, item.weight || 1, item.duration_days || 0, req.user.id]
+        );
+        insertedCount++;
+      }
+    }
+
+    await client.query('COMMIT');
+
+    await logAudit(db, {
+      userId: req.user.id, userName: req.user.name,
+      action: 'TEMPLATE_APPLIED', entityType: 'project', entityId: req.params.id,
+      newData: { template_source, template_id, project_type, stages_added: insertedCount },
+    });
+
+    const { rows: stages } = await db.query(
+      'SELECT * FROM project_activity_schedule WHERE project_id=$1 ORDER BY sort_order ASC',
+      [req.params.id]
+    );
+    res.json({ success: true, data: stages });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+const getStageTemplates = async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT st.*, COUNT(sti.id) AS item_count
+     FROM stage_templates st
+     LEFT JOIN stage_template_items sti ON sti.template_id = st.id
+     GROUP BY st.id ORDER BY st.created_at DESC`
+  );
+  res.json({ success: true, data: rows });
+};
+
+const createStageTemplate = async (req, res) => {
+  const { name, description, project_type, items } = req.body;
+  if (!name) return res.status(400).json({ success: false, message: 'name is required' });
+
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: tpl } = await client.query(
+      'INSERT INTO stage_templates (name,description,project_type,created_by) VALUES ($1,$2,$3,$4) RETURNING *',
+      [name, description || null, project_type || null, req.user.id]
+    );
+
+    if (Array.isArray(items) && items.length > 0) {
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        await client.query(
+          `INSERT INTO stage_template_items (template_id,title,phase_group,sort_order,weight,duration_days)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [tpl[0].id, it.title, it.phase_group || null, it.sort_order ?? i, it.weight || 1, it.duration_days || 0]
+        );
+      }
+    }
+    await client.query('COMMIT');
+    res.status(201).json({ success: true, data: tpl[0] });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+// ── Stage template sample download ──────────────────────────
+const downloadSampleStageTemplate = (req, res) => {
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([
+    ['Stage Name', 'Phase', 'Planned Days', 'Weight', 'Notes'],
+    ['Site Measurements and Layout plan', 'Furniture Layout', 4, 1, 'Initial site visit'],
+    ['Concept presentation', '3D Design', 2, 1, 'Google Slides presentation'],
+    ['3D Previews and client review', '3D Design', 7, 1.5, 'All rooms'],
+    ['Detailed Estimation', 'Estimation', 4, 1, ''],
+    ['Plumbing working drawings', '2D Drawings', 2, 1, ''],
+    ['Civil Work start', 'Execution - Civil', 30, 3, 'Main execution phase'],
+    ['Carpentry Installation', 'Execution', 21, 2, ''],
+    ['Site cleaning', 'Execution', 4, 1, ''],
+    ['Site handover', 'Execution', 1, 1, 'Client sign-off'],
+  ]);
+  ws['!cols'] = [{ wch: 40 }, { wch: 22 }, { wch: 14 }, { wch: 10 }, { wch: 35 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'Stage Template');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Disposition', 'attachment; filename="stage_template_sample.xlsx"');
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buf);
+};
+
+// ── Import stage template from Excel/CSV ─────────────────────
+const importStageTemplate = async (req, res) => {
+  if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
+  const { name, description, project_type } = req.body;
+  if (!name) return res.status(400).json({ success: false, message: 'Template name is required' });
+
+  const wb = XLSX.readFile(req.file.path);
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rawRows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+  const getCell = (row, ...keys) => {
+    for (const k of keys) {
+      for (const candidate of [k, k.toLowerCase(), k.toUpperCase(), k.replace(/ /g, '_')]) {
+        const v = row[candidate];
+        if (v !== undefined && v !== '') return String(v).trim();
+      }
+    }
+    return '';
+  };
+
+  const items = [];
+  for (const row of rawRows) {
+    const title = getCell(row, 'Stage Name', 'stage_name', 'title', 'name', 'milestone_name', 'Milestone Name');
+    if (!title) continue;
+    items.push({
+      title,
+      phase_group: getCell(row, 'Phase', 'phase', 'phase_group', 'Phase Group') || null,
+      duration_days: Math.max(0, parseInt(getCell(row, 'Planned Days', 'planned_days', 'duration_days', 'Duration Days') || '0') || 0),
+      weight: Math.max(0.01, parseFloat(getCell(row, 'Weight', 'weight') || '1') || 1),
+    });
+  }
+
+  if (!items.length) {
+    return res.status(400).json({ success: false, message: 'No valid stage rows found. Ensure the file has a "Stage Name" column.' });
+  }
+
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: tpl } = await client.query(
+      'INSERT INTO stage_templates (name, description, project_type, created_by) VALUES ($1,$2,$3,$4) RETURNING *',
+      [name, description || null, project_type || null, req.user.id]
+    );
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      await client.query(
+        `INSERT INTO stage_template_items (template_id, title, phase_group, sort_order, weight, duration_days)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [tpl[0].id, it.title, it.phase_group, i, it.weight, it.duration_days]
+      );
+    }
+    await client.query('COMMIT');
+    res.status(201).json({ success: true, data: { ...tpl[0], item_count: items.length } });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+// ── Advance project to Kanban column (drag/drop) ─────────
+const ADVANCE_COLUMN_ORDER = [
+  'Not Started', 'Furniture Layout', 'Estimation', '3D Design',
+  '2D Drawings', 'Execution - Civil', 'Execution', 'Handover', 'Completed',
+];
+const ADVANCE_COLUMN_TO_PHASES = {
+  'Not Started':       [],
+  'Furniture Layout':  ['Furniture Layout'],
+  'Estimation':        ['Estimation'],
+  '3D Design':         ['3D Design'],
+  '2D Drawings':       ['2D Drawings'],
+  'Execution - Civil': ['Execution - Civil'],
+  'Execution':         ['Execution'],
+  'Handover':          ['Handover'],
+  'Completed':         [],
+};
+
+const advanceToColumn = async (req, res) => {
+  const { target_column, direction } = req.body;
+  const targetIdx = ADVANCE_COLUMN_ORDER.indexOf(target_column);
+  if (targetIdx === -1) return res.status(400).json({ success: false, message: 'Invalid target column' });
+
+  if (direction === 'backward') {
+    // Reset stages in phases AFTER target column to pending
+    const phasesToReset = ADVANCE_COLUMN_ORDER
+      .slice(targetIdx + 1)
+      .flatMap(col => ADVANCE_COLUMN_TO_PHASES[col] || []);
+
+    if (phasesToReset.length > 0) {
+      await db.query(
+        `UPDATE project_activity_schedule
+         SET status = 'pending', completed_by = NULL, updated_at = NOW()
+         WHERE project_id = $1 AND phase = ANY($2::text[])`,
+        [req.params.id, phasesToReset]
+      );
+    }
+  } else {
+    // Forward: complete all stages in phases BEFORE target column
+    const phasesToComplete = ADVANCE_COLUMN_ORDER
+      .slice(0, targetIdx)
+      .flatMap(col => ADVANCE_COLUMN_TO_PHASES[col] || []);
+
+    if (phasesToComplete.length > 0) {
+      await db.query(
+        `UPDATE project_activity_schedule
+         SET status = 'completed', updated_at = NOW()
+         WHERE project_id = $1 AND phase = ANY($2::text[]) AND status != 'completed'`,
+        [req.params.id, phasesToComplete]
+      );
+    }
+
+    if (target_column === 'Completed') {
+      await db.query('UPDATE projects SET status = $1 WHERE id = $2', ['completed', req.params.id]);
+    }
+  }
+
+  await logAudit(db, {
+    userId: req.user.id, userName: req.user.name,
+    action: 'PROJECT_COLUMN_ADVANCED', entityType: 'project', entityId: req.params.id,
+    newData: { target_column, direction },
+  });
+
+  res.json({ success: true });
+};
+
+// ── Bulk team member sync ────────────────────────────────
+const syncTeamMembers = async (req, res) => {
+  const { user_ids } = req.body;
+  if (!Array.isArray(user_ids)) return res.status(400).json({ success: false, message: 'user_ids array required' });
+
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: before } = await client.query(
+      'SELECT user_id FROM project_team WHERE project_id=$1', [req.params.id]
+    );
+
+    await client.query('DELETE FROM project_team WHERE project_id=$1', [req.params.id]);
+
+    for (const uid of user_ids) {
+      await client.query(
+        'INSERT INTO project_team (project_id, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
+        [req.params.id, uid]
+      );
+    }
+    await client.query('COMMIT');
+
+    await logAudit(db, {
+      userId: req.user.id, userName: req.user.name,
+      action: 'TEAM_UPDATED', entityType: 'project', entityId: req.params.id,
+      oldData: { user_ids: before.map(r => r.user_id) },
+      newData: { user_ids },
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+// ── Audit log list ────────────────────────────────────────
+const getAuditLogs = async (req, res) => {
+  const { entity_type, entity_id, limit = 50 } = req.query;
+  let q = 'SELECT * FROM audit_logs WHERE 1=1';
+  const params = [];
+  let idx = 1;
+  if (entity_type) { q += ` AND entity_type=$${idx++}`; params.push(entity_type); }
+  if (entity_id)   { q += ` AND entity_id=$${idx++}`;   params.push(entity_id); }
+  q += ` ORDER BY created_at DESC LIMIT $${idx}`;
+  params.push(parseInt(limit));
+  const { rows } = await db.query(q, params);
+  res.json({ success: true, data: rows });
+};
+
+// ── Override updateStatus to add audit log ────────────────
+const updateStatusWithAudit = async (req, res) => {
+  const { status } = req.body;
+  const { rows: before } = await db.query('SELECT status FROM projects WHERE id=$1', [req.params.id]);
+  const { rows } = await db.query('UPDATE projects SET status = $1 WHERE id = $2 RETURNING id, name, status', [status, req.params.id]);
+
+  await logAudit(db, {
+    userId: req.user.id, userName: req.user.name,
+    action: 'PROJECT_STATUS_CHANGED', entityType: 'project', entityId: req.params.id,
+    oldData: { status: before[0]?.status }, newData: { status },
+  });
+
+  res.json({ success: true, data: rows[0] });
+};
+
+module.exports = {
+  list, getOne, create, update,
+  updateStatus: updateStatusWithAudit,
+  hardDelete,
+  addTeamMember, removeTeamMember, syncTeamMembers,
+  upsertContractor, removeContractor,
+  getSchedule, updateScheduleItem, generateSchedule,
+  getStages, createStage, updateStage, deleteStage,
+  applyTemplate, getStageTemplates, createStageTemplate,
+  downloadSampleStageTemplate, importStageTemplate,
+  getTrackerData, getAuditLogs,
+  bulkImport, downloadTemplate,
+  advanceToColumn,
+};

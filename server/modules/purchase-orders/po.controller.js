@@ -301,6 +301,15 @@ const update = async (req, res) => {
     await _recalcTotals(req.params.id);
   }
 
+  // Audit log
+  try {
+    await db.query(
+      `INSERT INTO audit_logs (user_id, user_name, action, entity_type, entity_id, notes)
+       VALUES ($1,$2,'PO_UPDATED','purchase_order',$3,$4)`,
+      [req.user.id, req.user.name, req.params.id, `PO updated by ${req.user.name}`]
+    );
+  } catch (_) {}
+
   const full = await fetchFullPO(req.params.id);
   res.json({ success: true, data: full });
 };
@@ -457,10 +466,6 @@ const submitGoodsReceipt = async (req, res) => {
   if (!po) return res.status(404).json({ success: false, message: 'PO not found' });
   if (po.status !== 'approved') {
     return res.status(400).json({ success: false, message: 'Can only submit receipt for approved POs' });
-  }
-
-  if (po.created_by !== req.user.id) {
-    return res.status(403).json({ success: false, message: 'Only the PO creator can submit goods receipt' });
   }
 
   // Validate side notes; null out side_note when quantities match

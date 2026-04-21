@@ -1,1251 +1,1479 @@
-# Xclusive Interiors — Comprehensive Project Architecture & Documentation
-
-> **Report Date:** 2026-04-15
-> **Prepared by:** Automated Architectural Audit
-> **Version:** 1.0
-> **Classification:** Internal — Stakeholder Reference
+# Xclusive Interiors — Complete System Architecture & Developer Reference
+> Version: 2.0 | Date: 2026-04-21 | Classification: Internal — Stakeholder Reference
+> System: PO & Project Management ERP | Environment: Hostinger VPS, Docker Compose
+> Users: ~25 concurrent | Stack: React 18 + Node.js + PostgreSQL + Docker
 
 ---
 
 ## Table of Contents
 
-1. [Executive Summary](#1-executive-summary)
-2. [Tech Stack Overview](#2-tech-stack-overview)
-3. [Directory Structure Map](#3-directory-structure-map)
-4. [System Architecture Diagram](#4-system-architecture-diagram)
-5. [File Analysis — Backend](#5-file-analysis--backend)
-6. [File Analysis — Frontend](#6-file-analysis--frontend)
-7. [Database Schema](#7-database-schema)
-8. [API Endpoint Catalog](#8-api-endpoint-catalog)
-9. [Data Flow Diagrams](#9-data-flow-diagrams)
-10. [Security Architecture](#10-security-architecture)
-11. [Deployment Architecture](#11-deployment-architecture)
-12. [Third-Party Integrations](#12-third-party-integrations)
-13. [Role & Permission Matrix](#13-role--permission-matrix)
-14. [File Storage Architecture](#14-file-storage-architecture)
-15. [Frontend Architecture](#15-frontend-architecture)
-16. [Background Jobs & Automation](#16-background-jobs--automation)
-17. [Known Design Decisions & Patterns](#17-known-design-decisions--patterns)
+1. [Project Overview](#1-project-overview)
+2. [Technology Stack](#2-technology-stack)
+3. [Directory Structure](#3-directory-structure)
+4. [Docker & Deployment Architecture](#4-docker--deployment-architecture)
+5. [Backend Architecture — Entry Point](#5-backend-architecture--entry-point)
+6. [Middleware Layer](#6-middleware-layer)
+7. [Database Configuration & Connection Pool](#7-database-configuration--connection-pool)
+8. [Auto-Migration System](#8-auto-migration-system)
+9. [Backend Modules — Complete Reference](#9-backend-modules--complete-reference)
+10. [Frontend Architecture](#10-frontend-architecture)
+11. [Database Schema — All Tables](#11-database-schema--all-tables)
+12. [Complete API Endpoint Reference](#12-complete-api-endpoint-reference)
+13. [Authentication & Authorization Flow](#13-authentication--authorization-flow)
+14. [Key Business Flows](#14-key-business-flows)
+15. [Frontend ↔ Backend Connection Map](#15-frontend--backend-connection-map)
+16. [Security Model & Threat Analysis](#16-security-model--threat-analysis)
+17. [Diagnosis: Issues, Loose Ends & Recommendations](#17-diagnosis-issues-loose-ends--recommendations)
 
 ---
 
-## 1. Executive Summary
+## 1. Project Overview
 
-**Xclusive Interiors PO & Project Management System** is a full-stack, containerised internal business management platform built for Xclusive Interiors Pvt. Ltd. (Pune, India). It digitises the company's end-to-end interior project workflow — from project creation and vendor management through purchase order approval, daily progress reporting, checklist tracking, snag logging, invoice management, and automated notifications.
+Xclusive Interiors Pvt. Ltd. is an interior design and architecture firm based in Pune. This system is a full-featured **internal ERP** for managing the company's projects, purchase orders, vendors, daily reports, invoices, and team workflows.
 
-The system is structured as a **React 18 SPA** (served via Nginx) communicating over REST with a **Node.js + Express.js** backend that persists data in **PostgreSQL 15**, all orchestrated by **Docker Compose** for WLAN-ready local deployment. The architecture follows a **modular monolith** pattern on the server: each business domain lives in its own folder (`modules/<domain>/`) with dedicated routes and controller files, all sharing a single PostgreSQL connection pool.
+**Business Context:**
+- Company: Xclusive Interiors Pvt. Ltd., 208 Vision Galleria, Pimple Saudagar, Pune 411027
+- GSTIN: 27AAACX1884C1ZD
+- Users: ~25 internal staff (admins, managers, employees/field staff)
+- Hosted on: Hostinger VPS (Linux), Docker Compose
+- Access: Internal web app at a domain configured via `CLIENT_URL` env var
 
-### Key Capabilities at a Glance
-
-| Domain | Core Capability |
-|---|---|
-| Authentication | JWT via httpOnly cookie, 3-role RBAC |
-| Projects | Full lifecycle management with team, contractors, and activity schedule |
-| Purchase Orders | 4-state workflow (draft → pending → approved/rejected) with auto PDF + email |
-| Vendors | Master with bank details, category filtering, bulk Excel import |
-| Elements | 1,538-item master catalogue with category grouping, Excel import/export |
-| DPR | Daily Progress Reports with photo and voice note uploads |
-| Checklist | Template-based project checklists with per-item completion tracking |
-| Snag List | Issue logging with attachments and admin review/resolution workflow |
-| Invoices | File-based invoice tracking linked to projects/POs/vendors |
-| Notifications | In-app bell notifications for PO events and overdue goods receipts |
-| Activity Schedule | 405-template Gantt-style milestone tracker per project type |
-
----
-
-## 2. Tech Stack Overview
-
-| Layer | Technology | Version | Purpose |
-|---|---|---|---|
-| Frontend Framework | React | 18.2.0 | Component-based SPA |
-| Build Tool | Vite | 5.0.8 | Fast dev server & production bundler |
-| Styling | Tailwind CSS | 3.3.6 | Utility-first CSS |
-| UI Components | Radix UI (shadcn/ui) | Various | Accessible headless primitives |
-| State Management | Zustand | 4.4.7 | Lightweight global store |
-| Data Fetching | TanStack React Query | 5.0.0 | Server state / cache |
-| HTTP Client | Axios | 1.6.2 | API calls with interceptors |
-| Forms | React Hook Form | 7.48.2 | Form state + validation |
-| Routing | React Router DOM | 6.20.1 | Client-side routing |
-| Icons | Lucide React | 0.294.0 | Icon library |
-| Backend Runtime | Node.js + Express | 4.18.2 | REST API server |
-| Database | PostgreSQL | 15 (Alpine) | Primary data store |
-| ORM / Query | `pg` (node-postgres) | 8.11.3 | Raw SQL with connection pool |
-| Authentication | JSON Web Token | 9.0.2 | Stateless auth tokens |
-| Password Hashing | bcryptjs | 2.4.3 | Secure password storage |
-| PDF Generation | Puppeteer | 21.5.2 | HTML → PDF via headless Chromium |
-| Email | Nodemailer | 6.9.7 | Gmail SMTP automated delivery |
-| File Uploads | Multer | 1.4.5 | Multipart form data handling |
-| Excel I/O | xlsx (SheetJS) | 0.18.5 | Import/export Excel files |
-| Validation | express-validator | 7.0.1 | Input validation middleware |
-| Rate Limiting | express-rate-limit | 7.5.1 | API abuse protection |
-| Security Headers | Helmet | 7.1.0 | HTTP security headers |
-| Cookie Handling | cookie-parser | 1.4.6 | JWT cookie parsing |
-| HTTP Logging | Morgan | 1.10.0 | Request logging |
-| UUID Generation | uuid | 9.0.1 | UUID v4 for file naming |
-| Containerisation | Docker + Docker Compose | 3.8 | Full stack orchestration |
-| Frontend Web Server | Nginx | (Alpine) | SPA serving + API reverse proxy |
+**Core Modules:**
+- **Dashboard** — summary cards, quick stats
+- **Projects** — project lifecycle, stages, team, schedule, checklists, snags
+- **Project Tracker** — Kanban board + table view of all active projects
+- **Purchase Orders (PO)** — full PO lifecycle: draft → submitted → approved → receipt
+- **Vendors** — vendor master with bank/GST details
+- **Elements Master** — material/item catalog with categories
+- **Daily Progress Reports (DPR)** — site visit reports with images and voice notes
+- **Checklist** — project-specific task checklists from templates
+- **Snag List** — defect/issue tracking with images and files
+- **Invoices** — invoice record keeping with file attachments
+- **Notifications** — in-app alerts for receipt deadlines, overdue POs
+- **Users** — user management, roles, password management
 
 ---
 
-## 3. Directory Structure Map
+## 2. Technology Stack
+
+### Backend
+| Layer | Technology | Version/Notes |
+|-------|-----------|---------------|
+| Runtime | Node.js | v18+ |
+| Framework | Express.js | REST API |
+| Database | PostgreSQL | v15 (Docker), v18 on host |
+| DB Driver | `pg` (node-postgres) | Connection Pool (`Pool`) |
+| Auth | JSON Web Token (`jsonwebtoken`) | Cookie-based + Bearer header |
+| Password | `bcryptjs` | Hash + compare |
+| File Upload | `multer` | Disk storage, /tmp for imports |
+| Excel I/O | `xlsx` | Bulk import/export templates |
+| PDF Gen | `pdfkit` (`server/utils/pdf.js`) | PO and receipt PDFs |
+| Email | `nodemailer` + Gmail | PO notifications |
+| Validation | `express-validator` | Input validation middleware |
+| Error Handling | `express-async-errors` | Auto-catch async errors |
+| Rate Limiting | `express-rate-limit` | 100 req / 15 min |
+| Security | `helmet` | HTTP security headers |
+| CORS | `cors` | Origin whitelist from `CLIENT_URL` |
+| Logging | `morgan` | Dev format HTTP logs |
+| UUID | `uuid` (v4) | File naming in uploads |
+
+### Frontend
+| Layer | Technology | Notes |
+|-------|-----------|-------|
+| Framework | React 18 | Functional components, hooks |
+| Build Tool | Vite | Fast HMR, env vars as `VITE_*` |
+| Routing | React Router v6 | `<Routes>` + `<Navigate>` |
+| Server State | TanStack Query (React Query v5) | `useQuery`, `useMutation` |
+| Client State | Zustand | Auth store, invoice store |
+| HTTP Client | Axios | Configured at `/api` base URL |
+| Styling | Tailwind CSS v3 | Utility-first, PostCSS |
+| Icons | Lucide React | SVG icons |
+| UI Components | Custom shared components | `client/src/components/shared/index.jsx` |
+| Drag & Drop | HTML5 native | Kanban board |
+
+### Infrastructure
+| Component | Technology | Notes |
+|-----------|-----------|-------|
+| Container | Docker + Docker Compose v3.8 | 3 services: postgres, server, client |
+| Web Server | Nginx (in client container) | Serves built React app on port 80→3000 |
+| VPS | Hostinger VPS | Linux, ports 3000 and 5000 exposed |
+| Volumes | Docker named volume `postgres_data` | DB persistence |
+| File Storage | Server filesystem (`./server/uploads`) | Bind-mounted to container |
+
+---
+
+## 3. Directory Structure
 
 ```
-xclusive-interiors/                  ← Root of monorepo
-│
-├── docker-compose.yml               ← Orchestrates postgres, server, client
-├── .env                             ← Runtime secrets (DB, JWT, Gmail, URLs)
-├── .dockerignore
-├── .gitignore
+xclusive-interiors/
+├── docker-compose.yml          # 3-service Docker orchestration
+├── generate_pdf.py             # Python: converts PROJECT_ANALYSIS.md → PDF
+├── backup_before_tracker.sql   # DB snapshot taken before Project Tracker upgrade
 ├── README.md
 │
-├── client/                          ← React 18 + Vite frontend
-│   ├── Dockerfile                   ← Multi-stage: node build → nginx serve
-│   ├── index.html                   ← SPA shell
-│   ├── nginx.conf                   ← SPA routing + /api proxy to server:5000
-│   ├── vite.config.js               ← Vite config with React plugin
-│   ├── tailwind.config.js           ← Tailwind content paths
-│   ├── postcss.config.js            ← PostCSS + autoprefixer
-│   ├── package.json                 ← Frontend dependencies
+├── client/                     # React 18 + Vite frontend
+│   ├── Dockerfile              # Multi-stage: build → nginx serve
+│   ├── vite.config.js          # Vite config: proxy /api → server:5000
+│   ├── tailwind.config.js      # Tailwind theme config
+│   ├── postcss.config.js       # PostCSS (autoprefixer)
+│   ├── package.json            # Frontend deps
 │   └── src/
-│       ├── main.jsx                 ← React DOM root (BrowserRouter)
-│       ├── App.jsx                  ← Route tree (all pages declared here)
-│       ├── index.css                ← Tailwind directives + CSS variables
+│       ├── main.jsx            # React root: BrowserRouter, QueryClient, App
+│       ├── App.jsx             # Route tree + protected route wrapper
 │       ├── lib/
-│       │   ├── api.js               ← Axios instance (baseURL + 401 interceptor)
-│       │   └── utils.js             ← cn() utility (clsx + tailwind-merge)
+│       │   ├── api.js          # Axios instance (baseURL=/api, withCredentials)
+│       │   └── utils.js        # cn() helper (clsx + tailwind-merge)
 │       ├── store/
-│       │   ├── authStore.js         ← Zustand: user, login, logout, fetchMe
-│       │   └── invoiceStore.js      ← Zustand: invoice CRUD + file management
+│       │   ├── authStore.js    # Zustand: user state, login/logout/fetchMe
+│       │   └── invoiceStore.js # Zustand: invoice filters
 │       ├── components/
 │       │   ├── layout/
-│       │   │   ├── AppLayout.jsx    ← Sidebar + topbar shell (responsive)
-│       │   │   └── ProtectedRoute.jsx ← Auth guard wrapper
+│       │   │   ├── AppLayout.jsx      # Sidebar + topbar + <Outlet />
+│       │   │   └── ProtectedRoute.jsx # Redirects to /login if unauthenticated
 │       │   └── shared/
-│       │       └── index.jsx        ← Shared UI: Button, Badge, Card, Modal, Input
+│       │       ├── index.jsx          # Button, Input, Select, Modal, Badge, etc.
+│       │       └── BulkImportModal.jsx
 │       └── pages/
 │           ├── auth/LoginPage.jsx
 │           ├── dashboard/DashboardPage.jsx
-│           ├── projects/            ← List, Detail, Form
-│           ├── purchase-orders/     ← List, Detail (approve/reject), Form
-│           ├── vendors/             ← List, Form
-│           ├── elements/            ← Master list + Excel import
-│           ├── categories/          ← Admin category management
-│           ├── dpr/                 ← List, Form, Detail
-│           ├── checklist/           ← Project checklist with progress
-│           ├── snaglist/            ← Log snags + admin review
-│           ├── invoices/            ← Invoice tracking
-│           ├── users/               ← User management
-│           ├── notifications/       ← In-app notification center
-│           └── profile/             ← Self-service profile + password change
+│           ├── projects/
+│           │   ├── ProjectsPage.jsx       # List + filter + bulk import
+│           │   ├── ProjectDetailPage.jsx  # Tabbed: Overview/Stages/POs/DPR/Snags/Team
+│           │   ├── ProjectFormPage.jsx    # Create/edit form
+│           │   └── StagesTab.jsx          # Stage engine UI (phases, kanban, drive links)
+│           ├── project-tracker/
+│           │   └── ProjectTrackerPage.jsx # Kanban + Table views, filters, drag/drop
+│           ├── purchase-orders/
+│           │   ├── POListPage.jsx
+│           │   ├── POFormPage.jsx
+│           │   └── PODetailPage.jsx       # PO detail, approval, receipt, PDF
+│           ├── vendors/
+│           │   ├── VendorsPage.jsx
+│           │   └── VendorFormPage.jsx
+│           ├── elements/ElementsPage.jsx
+│           ├── categories/CategoriesPage.jsx
+│           ├── dpr/
+│           │   ├── DPRListPage.jsx
+│           │   ├── DPRFormPage.jsx
+│           │   └── DPRDetailPage.jsx
+│           ├── checklist/ChecklistPage.jsx
+│           ├── snaglist/SnaglistPage.jsx
+│           ├── invoices/InvoicesPage.jsx
+│           ├── notifications/NotificationsPage.jsx
+│           ├── users/UsersPage.jsx
+│           └── profile/ProfilePage.jsx
 │
-└── server/                          ← Node.js + Express backend
-    ├── Dockerfile                   ← node:18-alpine production image
-    ├── index.js                     ← Express app bootstrap + route mounting
-    ├── package.json                 ← Backend dependencies
+└── server/                     # Node.js + Express backend
+    ├── Dockerfile              # Node 18-alpine image
+    ├── package.json            # Backend deps
+    ├── index.js                # Express app entry point
     ├── config/
-    │   └── db.js                    ← pg.Pool (max 20 connections)
+    │   └── db.js               # pg.Pool connection config
     ├── middleware/
-    │   ├── auth.js                  ← JWT verify → req.user
-    │   ├── role.js                  ← authorize(...roles) factory
-    │   ├── rateLimiter.js           ← 100 req / 15 min window
-    │   └── uploadValidator.js       ← Post-multer MIME + size check
-    ├── modules/
-    │   ├── auth/                    ← login, logout, /me
-    │   ├── users/                   ← CRUD, bulk import, password management
-    │   ├── projects/                ← Projects + team + contractors + schedule
-    │   ├── vendors/                 ← Vendors + categories + Excel import/export
-    │   ├── categories/              ← Element category master
-    │   ├── elements/                ← Elements master + Excel import/export
-    │   ├── purchase-orders/         ← Full PO workflow + PDF + email + receipt
-    │   ├── dpr/                     ← Daily Progress Reports + file uploads
-    │   ├── checklist/               ← Template-based checklists
-    │   ├── snaglist/                ← Snag logging + admin review
-    │   ├── activity-schedule/       ← Schedule templates + project types
-    │   ├── invoices/                ← Invoice CRUD + file attachments
-    │   └── notifications/           ← In-app + overdue checker helper
-    ├── utils/
-    │   ├── pdf.js                   ← Puppeteer HTML→PDF builder
-    │   ├── email.js                 ← Nodemailer Gmail sender
-    │   ├── overdueChecker.js        ← Hourly cron for overdue PO receipts
-    │   └── validate.js              ← express-validator result handler
-    ├── uploads/                     ← Persistent file storage (Docker volume)
-    │   ├── dpr-images/              ← Site photos from DPR submissions
-    │   ├── dpr-voice/               ← Voice note recordings from DPR
-    │   ├── po-pdfs/                 ← Auto-generated PO PDFs (on approval)
-    │   ├── po-items/                ← Line item reference images
-    │   ├── snag-images/             ← Snag issue photos
-    │   ├── snag-files/              ← Snag supporting documents
-    │   └── invoices/                ← Uploaded vendor invoice files
-    └── db/
-        └── migrations/
-            ├── 001_init.sql         ← All core tables (20 tables)
-            ├── 002_seed.sql         ← 1,538 elements + 405 activity templates
-            ├── 003_patches.sql      ← Column additions to activity schedule
-            ├── 004_snag_files.sql   ← snag_files table
-            ├── 005_invoices.sql     ← invoices + invoice_files tables
-            ├── 006_vendor_categories.sql ← vendor_categories table
-            ├── 007_goods_receipt_notifications.sql ← po_goods_receipt + notifications + user pw tracking
-            └── 008_line_item_images.sql ← line_item_images table
+    │   ├── auth.js             # authenticate: JWT verify → req.user
+    │   ├── role.js             # authorize(...roles): role-based guard
+    │   ├── rateLimiter.js      # express-rate-limit (100/15min)
+    │   └── uploadValidator.js  # File size + MIME type check post-multer
+    ├── db/
+    │   ├── autoMigrate.js      # Idempotent schema patches run at startup
+    │   └── migrations/         # Numbered SQL files (Docker init & manual ref)
+    │       ├── 001_init.sql    # Core schema: all tables
+    │       ├── 002_seed.sql    # Admin user + 45 activity schedule templates
+    │       ├── 003_patches.sql # Schema patches round 1
+    │       ├── 004_snag_files.sql
+    │       ├── 005_invoices.sql
+    │       ├── 006_vendor_categories.sql
+    │       ├── 007_goods_receipt_notifications.sql
+    │       ├── 008_line_item_images.sql
+    │       ├── 009_receipt_verification.sql
+    │       └── 010_project_stages.sql  # Stage engine tables + status enum
+    ├── modules/               # Feature modules (routes + controllers)
+    │   ├── auth/              auth.routes.js, auth.controller.js
+    │   ├── users/             users.routes.js, users.controller.js
+    │   ├── projects/          projects.routes.js, projects.controller.js
+    │   ├── purchase-orders/   po.routes.js, po.controller.js
+    │   ├── vendors/           vendors.routes.js, vendors.controller.js
+    │   ├── categories/        categories.routes.js
+    │   ├── elements/          elements.routes.js, elements.controller.js
+    │   ├── dpr/               dpr.routes.js (inline controller)
+    │   ├── checklist/         checklist.routes.js (inline controller)
+    │   ├── snaglist/          snaglist.routes.js (inline controller)
+    │   ├── invoices/          invoices.routes.js, invoices.controller.js
+    │   ├── notifications/     notifications.routes.js (inline + helper)
+    │   └── activity-schedule/ activity.routes.js (inline controller)
+    └── utils/
+        ├── email.js           # Nodemailer: PO approval/rejection emails
+        ├── overdueChecker.js  # setInterval job: flag overdue PO receipts
+        ├── pdf.js             # PDFKit: generate PO PDF, receipt PDF
+        └── validate.js        # express-validator result middleware
 ```
 
 ---
 
-## 4. System Architecture Diagram
+## 4. Docker & Deployment Architecture
 
-```mermaid
-graph TB
-    subgraph "Client Devices (LAN / WLAN)"
-        B[Browser / Mobile Browser]
-    end
+### `docker-compose.yml` Services
 
-    subgraph "Docker Network: xclusive_net"
-        subgraph "client container :3000→80"
-            N[Nginx]
-            SPA[React 18 SPA\nVite build]
-        end
+**postgres** (PostgreSQL 15-alpine)
+- Mounts `./server/db/migrations` → `/docker-entrypoint-initdb.d` so all numbered SQL files run in order on first container creation
+- Health check: `pg_isready` every 5s
+- Named volume `postgres_data` for persistence across container restarts
+- Env: `DB_USER`, `DB_PASSWORD`, `DB_NAME` from `.env` file
 
-        subgraph "server container :5000"
-            EX[Express.js API\nindex.js]
-            subgraph "Middleware Stack"
-                HLM[Helmet\nSecurity Headers]
-                CORS[CORS\nAllowlist]
-                RL[Rate Limiter\n100 req/15min]
-                AUTH[authenticate\nJWT Verify]
-                ROLE[authorize\nRBAC]
-                UPV[uploadValidator\nMIME+Size]
-            end
-            subgraph "Route Modules"
-                AR[/api/auth]
-                UR[/api/users]
-                PR[/api/projects]
-                VR[/api/vendors]
-                CR[/api/categories]
-                ER[/api/elements]
-                POR[/api/purchase-orders]
-                DPR[/api/dpr]
-                CKR[/api/checklist]
-                SLR[/api/snaglist]
-                ACR[/api/activity-schedule]
-                INR[/api/invoices]
-                NTR[/api/notifications]
-            end
-            subgraph "Utilities"
-                PDF[pdf.js\nPuppeteer PDF]
-                EMAIL[email.js\nNodemailer]
-                OC[overdueChecker.js\nSetInterval 1h]
-            end
-        end
+**server** (Node.js Express API)
+- Built from `./server/Dockerfile` (Node 18-alpine)
+- Port `5000:5000` exposed to host
+- Env vars: full database connection + JWT + email + company info from `.env`
+- Depends on `postgres` health check being healthy
+- Volume bind: `./server/uploads` → `/app/uploads` (file persistence outside container)
+- On startup: runs `autoMigrate.js` (idempotent patches), then starts `overdueChecker.js`
 
-        subgraph "postgres container"
-            PG[(PostgreSQL 15\n20+ tables)]
-        end
+**client** (React + Nginx)
+- Built from `./client/Dockerfile` (multi-stage: Node build → nginx:alpine serve)
+- Build arg `VITE_API_URL` passed from `.env` (sets base URL for API calls)
+- Port `3000:80` — serves built static files via Nginx
+- Depends on server (starts after)
 
-        subgraph "Persistent Volume"
-            VOL[./server/uploads\nImages · PDFs · Audio · Excel]
-        end
-    end
+### Environment Variables (`.env` at root, not committed)
 
-    subgraph "External Services"
-        GMAIL[Gmail SMTP\nsmtp.gmail.com:587]
-        CHROM[Headless Chromium\n inside server container]
-    end
+```
+DB_USER=xclusive_user
+DB_PASSWORD=<secret>
+DB_NAME=xclusive_db
+JWT_SECRET=<secret>
+JWT_EXPIRES_IN=7d
+GMAIL_USER=notifications@company.com
+GMAIL_APP_PASSWORD=<app-password>
+CLIENT_URL=https://your-domain.com
+VITE_API_URL=/api
+COMPANY_NAME=Xclusive Interiors Pvt. Ltd.
+COMPANY_ADDRESS=208, Vision Galleria, Near Kunal Icon, Pimple Saudagar, Pune 411027
+COMPANY_GSTIN=27AAACX1884C1ZD
+```
 
-    B -- "HTTP :3000" --> N
-    N -- "static SPA" --> SPA
-    N -- "proxy /api →" --> EX
-    N -- "proxy /uploads →" --> EX
-    EX -- "pg.Pool" --> PG
-    EX -- "fs read/write" --> VOL
-    PDF -- "launch" --> CHROM
-    EMAIL -- "SMTP" --> GMAIL
-    OC -- "queries" --> PG
-    OC -- "INSERT notifications" --> PG
+### Deployment Flow
+1. `git pull` latest code on VPS
+2. `docker-compose down && docker-compose up -d --build` (rebuilds both containers)
+3. Server starts → `autoMigrate.js` runs idempotent schema patches → `overdueChecker.js` starts
+4. Client is the built React SPA served via Nginx; API calls go to `/api` which Nginx proxies to `server:5000`
+
+---
+
+## 5. Backend Architecture — Entry Point
+
+### `server/index.js`
+
+This is the Express application bootstrap file. Every incoming HTTP request passes through it in this order:
+
+```
+Request → helmet → cors → rateLimiter → morgan → express.json → cookieParser
+        → static /uploads
+        → route handlers (per module)
+        → global error handler
+```
+
+**Key behaviors:**
+- `helmet()` — sets 11 security HTTP headers (X-Frame-Options, HSTS, CSP, etc.)
+- CORS whitelist: reads `CLIENT_URL` env var, splits by comma, allows those origins + requests with no origin (server-to-server). If an origin is not allowed, `cb(null, false)` silently drops it.
+- `credentials: true` — needed so browsers send the JWT cookie cross-origin
+- `rateLimiter` — applied at `app.use('/api/auth', ...)` AND `app.use('/api', ...)`. Note: `/api/auth` routes hit the limiter **twice** per request (see Diagnosis section).
+- `morgan('dev')` — logs HTTP method, URL, status, response time to stdout
+- `express.json()` + `express.urlencoded()` — parse JSON and form bodies
+- `cookieParser()` — parse `Cookie` header into `req.cookies`
+- Static files at `/uploads` — served without authentication (see Security section)
+- Global error handler: catches any error bubbled via `express-async-errors`, returns `{ success: false, message }` with appropriate status code
+
+**Server startup sequence:**
+```
+app.listen(5000) → runAutoMigrations() → startOverdueChecker()
 ```
 
 ---
 
-## 5. File Analysis — Backend
+## 6. Middleware Layer
 
-### `server/index.js` — Application Bootstrap
+### `server/middleware/auth.js` — `authenticate`
 
-The Express application entry point. Responsibilities:
-- Loads environment variables via `dotenv`
-- Configures global middleware: `helmet`, `cors` (allowlist from `CLIENT_URL`), `rateLimiter` (on all `/api` routes), `morgan` (dev logging), `express.json`, `express.urlencoded`, `cookieParser`
-- Mounts the static `/uploads` folder for direct file serving
-- Registers all 13 route modules under `/api/*` prefixes
-- Registers a global Express error handler
-- Starts `http.listen` on `PORT` (default 5000)
-- On startup, calls `startOverdueChecker()` (30-second delayed init, then hourly)
+Reads JWT from either `req.cookies.token` (httpOnly cookie) or `Authorization: Bearer <token>` header. Verifies against `JWT_SECRET`. Injects `req.user = { id, role, name, email }` (the JWT payload). Returns 401 if missing or invalid.
 
----
-
-### `server/config/db.js` — Database Connection
-
-Creates and exports a `pg.Pool` with max 20 connections, idle timeout 30s, connect timeout 2s. Exposes a `query(text, params)` wrapper and the raw `pool` (used for transaction management in goods receipt). Environment variables: `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`.
-
----
-
-### `server/middleware/auth.js` — JWT Authentication
-
-Reads the JWT from `req.cookies.token` (primary) or `Authorization: Bearer <token>` header (fallback). Verifies against `JWT_SECRET`. On success, attaches decoded payload `{ id, role, name, email }` to `req.user`. Returns `401` on missing or invalid tokens.
-
----
-
-### `server/middleware/role.js` — Role-Based Authorization
-
-Factory function: `authorize(...roles)` returns Express middleware that checks `req.user.role` against the allowed roles array. Returns `403` if role is not permitted. Used throughout route files as inline guards.
-
----
-
-### `server/middleware/rateLimiter.js` — API Rate Limiting
-
-Configured at **100 requests per 15-minute sliding window** per IP using `express-rate-limit`. Applied globally to both `/api/auth` and `/api` routes in `index.js`. Standard RFC headers are included (`RateLimit-*`).
-
----
-
-### `server/middleware/uploadValidator.js` — File Upload Validation
-
-Post-Multer validation middleware. Collects all uploaded files from `req.file`, `req.files[]`, and `req.files[fieldName][]`. Validates each against configurable `maxSizeBytes` (default 5MB) and `allowedMimeTypes` (default: JPEG, PNG, PDF). Returns `400` on violation. Applied after Multer in all upload routes.
-
----
-
-### `server/modules/auth/` — Authentication Module
-
-**`auth.routes.js`**: Three routes — `POST /login`, `POST /logout`, `GET /me`. Login uses express-validator for basic email/password validation.
-
-**`auth.controller.js`**: 
-- `login`: Queries users by email (case-insensitive), verifies bcrypt password hash. On success, signs a JWT `{ id, role, name, email }` and sets an httpOnly cookie (`token`) with 7-day expiry. Cookie security: `secure: true` only if `NODE_ENV=production` AND `CLIENT_URL` is HTTPS.
-- `logout`: Clears the `token` cookie.
-- `me`: Returns the current user's profile from DB (not from token, to ensure freshness).
-
----
-
-### `server/modules/users/` — User Management Module
-
-**`users.routes.js`**: Full CRUD with `authenticate` guard on all routes. Role guards:
-- List / Get One / Create / Update / Reset Password: `admin` or `manager`
-- Toggle Active / Hard Delete: `admin` only
-- Bulk Import / Template Download: `admin` or `manager`
-- Self password change / Get Me: any authenticated user
-
-**`users.controller.js`**: 
-- `list/getMe/getOne`: SELECT queries exposing profile fields (never `password_hash`)
-- `create`: bcrypt hash (cost 10), INSERT with RETURNING
-- `update`: COALESCE-based partial update for name/email/role
-- `resetPassword`: Admin-side unlimited password reset
-- `changeOwnPassword`: One-time self-service change. Blocked for admins. Tracks `password_changed_by_user` flag and `password_changed_at` timestamp
-- `toggleActive`: Flips `is_active` boolean
-- `hardDelete`: Blocks self-deletion; hard DELETE
-- `bulkImport`: Reads XLSX file (first sheet), hashes passwords, ON CONFLICT (email) DO NOTHING
-- `downloadTemplate`: Returns an in-memory XLSX template buffer
-
----
-
-### `server/modules/projects/` — Project Management Module
-
-**`projects.routes.js`**: Full CRUD + sub-resources. Static routes (`/template/download`, `/import`) declared before `/:id` to prevent route shadowing.
-
-**`projects.controller.js`**:
-- `list`: Returns all projects with aggregate PO count and DPR count
-- `getOne`: Returns full project graph — core fields + team members (JOINed users) + contractors + last 10 DPRs + all POs + checklists + snags
-- `create/update`: Dynamic field-based INSERT/UPDATE
-- `updateStatus`: PATCH for status changes only
-- `hardDelete`: Blocked if linked POs exist (referential integrity guard)
-- `addTeamMember / removeTeamMember`: Manages `project_team` join table (ON CONFLICT DO NOTHING)
-- `upsertContractor`: ON CONFLICT (project_id, trade) DO UPDATE — one contractor per trade per project
-- `getSchedule / updateScheduleItem`: Read and update `project_activity_schedule` items
-- `generateSchedule`: Bulk-insert activity rows from `activity_schedule_templates` filtered by project_type; clears existing schedule first
-- `bulkImport / downloadTemplate`: Excel-based project bulk import
-
----
-
-### `server/modules/vendors/` — Vendor Management Module
-
-**`vendors.routes.js`**: All routes behind `authenticate`. Static sub-routes (`/categories`, `/export`, `/template/download`, `/import`) before `/:id`.
-
-**`vendors.controller.js`**:
-- `ensureVendorCategories()`: Idempotent table creation helper (migration guard) + migrates existing vendor category strings into the `vendor_categories` table
-- `listCategories / createCategory`: Manages the `vendor_categories` lookup table
-- `validateCategory()`: Validates a category name against the lookup table before write
-- `list / getOne`: getOne includes last 20 linked POs
-- `create / update`: Validates category before write; supports all vendor fields including bank details
-- `toggleActive / hardDelete`: hardDelete blocked if linked POs exist
-- `bulkImport`: Validates categories per row; admin can auto-create unknown categories during import
-- `downloadTemplate / exportExcel`: Import template and full export respectively
-
----
-
-### `server/modules/categories/` — Element Category Master
-
-Inline route handlers (no separate controller file). Admin-only writes, all-authenticated reads. Supports list (with optional `active=true` filter), create, update name, toggle active.
-
----
-
-### `server/modules/elements/` — Elements Master
-
-**`elements.controller.js`**:
-- `list`: Supports `active`, `category_id`, and `search` query filters. JOINs category name
-- `getOne / create / update / toggleActive`: Standard CRUD
-- `importExcel`: Multi-sheet import — sheet name used as category fallback. Auto-upserts categories. ON CONFLICT DO NOTHING per element
-- `exportExcel`: Full dump as XLSX download
-
----
-
-### `server/modules/purchase-orders/` — Purchase Order Module
-
-The most complex module. Handles the full PO lifecycle.
-
-**`po.routes.js`**: Dependency-aware filtering endpoints, line-item image upload, full CRUD, workflow actions (submit, approve, reject), PDF download, goods receipt.
-
-**`po.controller.js`**:
-
-Category mapping constants (`ELEMENT_TO_VENDOR_CATEGORIES`, `VENDOR_TO_ELEMENT_CATEGORIES`) enable smart filtering: selecting an element category narrows vendor options and vice versa.
-
-- `generatePoNumber()`: Format `PO/YY-YY+1/NNNNN` — queries last PO with matching prefix, increments serial
-- `fetchFullPO(id)`: Master query joining PO + project + vendor + POC user + creator + submitter + line items (with goods receipt data and aggregated images)
-- `getVendorsByElementCategory`: Filters vendor list by mapped category
-- `getElementsByVendorCategory`: Filters elements list by mapped category
-- `list`: Filterable by project_id, vendor_id, status, created_by
-- `create`: Auto-generates PO number; POC logic: admin can select any user, others default to self; saves line items; recalculates totals
-- `update`: Blocked if status is not `draft` (admin can edit `pending_approval`); replaces all line items if provided
-- `submit`: `draft → pending_approval` — only creator can submit their own draft
-- `approve`: Generates PDF via Puppeteer; updates status to `approved`; inserts `po_approved` notification for creator; sends email to vendor (CC to internal users); records `email_sent=true` asynchronously
-- `reject`: `pending_approval → rejected` with admin comment; inserts `po_rejected` notification
-- `downloadPdf`: Serves PDF from `/uploads/po-pdfs/` — only for `approved` POs
-- `hardDelete`: Admin-only hard delete
-- `submitGoodsReceipt`: Transactional upsert of receipt quantities per line item; validates that side notes are provided when received qty differs from PO qty; triggers discrepancy notifications to all admins if any quantities differ
-- `uploadLineItemImages`: Uploads up to 5 images per line item (max 2MB each, JPEG/PNG/WEBP)
-
----
-
-### `server/modules/dpr/` — Daily Progress Reports
-
-Inline route handlers. Uses Multer disk storage with UUID filenames, routing audio files to `dpr-voice/` and images to `dpr-images/`. Accepts up to 10 images and 3 voice files per DPR.
-
-- `GET /`: Role-scoped listing — employees see only their own DPRs
-- `GET /:id`: Returns DPR with associated images and voice notes
-- `POST /`: Creates DPR + inserts image/voice records
-- `DELETE /:id`: Admin-only; cascade deletes associated media via FK
-
----
-
-### `server/modules/checklist/` — Checklist Templates & Project Checklists
-
-Two-tier system: admin-managed templates → project instances.
-
-- `GET/POST /templates`: CRUD for checklist templates (admin-only create)
-- `GET /templates/:id`: Template with ordered items
-- `GET /project/:projectId`: All checklists for a project with items and completion details
-- `POST /project/:projectId/assign`: Creates a `project_checklists` instance; copies template items into `project_checklist_items`
-- `PATCH /items/:itemId`: Mark item complete/incomplete with completed_by and timestamp
-
----
-
-### `server/modules/snaglist/` — Snag List
-
-Inline route handlers with Multer disk storage. Routes images to `snag-images/`, documents to `snag-files/`.
-
-- `GET /`: Role-scoped — employees see only their own snags; filterable by project_id and status
-- `GET /:id`: Snag with images and file attachments
-- `POST /`: Creates snag; supports up to 10 images + 5 documents per submission
-- `PATCH /:id`: Admin/manager-only review — updates status, admin_note, vendor assignment, confirmation dates, resolution tracking
-- `DELETE /:id`: Admin-only hard delete (FK cascade removes images/files)
-
----
-
-### `server/modules/invoices/` — Invoice Management
-
-**`invoices.routes.js`**: Multer disk storage to `uploads/invoices/`. Up to 20 files, 30MB each.
-
-**`invoices.controller.js`**:
-- `list`: Filterable by project_id, vendor_id, po_id; attaches files to each invoice
-- `create`: Creates invoice record; saves uploaded files; returns full invoice with files
-- `updateStatus`: Admin-only. Updates `approved` and `paid` boolean flags. Business rule: paid cannot be set true while approved is false
-- `hardDelete`: Admin-only; cascade removes files
-- `addFiles / deleteFile`: Manage files on existing invoices
-
----
-
-### `server/modules/notifications/` — Notifications
-
-Inline route handlers. Only pulls notifications for the authenticated user.
-
-- `GET /`: Last 50 notifications with PO number and project name
-- `GET /unread-count`: Unread count for bell icon badge
-- `PATCH /:id/read`: Mark single notification read
-- `PATCH /read-all`: Mark all read
-- `POST /check-overdue`: Admin-triggered manual overdue check
-
-**`checkOverdueReceipts()` helper** (exported for `overdueChecker.js`): Finds approved POs with no receipt submitted after 8 calendar days; creates `receipt_overdue` notifications for the PO creator and all admins; deduplicates within 24-hour window.
-
----
-
-### `server/modules/activity-schedule/` — Activity Schedule
-
-Read-only module for template data.
-
-- `GET /templates`: Returns `activity_schedule_templates` filtered by `project_type`; ordered by `step_number`
-- `GET /project-types`: Returns hardcoded list of 15 project types (2BHK → Commercial)
-
----
-
-### `server/utils/pdf.js` — Puppeteer PDF Generator
-
-`generatePOPdf(po)` builds a two-page A4 PDF:
-- **Page 1**: Company header (from env vars), bill-to details, vendor details, category summary table with totals, POC info, payment/other terms, signature block
-- **Page 2 (Annexure)**: Full line-items table (Element, Description, Category, UOM, Qty, Rate, Brand/Make, GST%, Total) with optional inline reference images (base64 embedded)
-
-Puppeteer is launched with `--no-sandbox`, `--disable-setuid-sandbox`, `--disable-dev-shm-usage` flags for Docker Alpine compatibility. Output saved to `uploads/po-pdfs/<PO-number>.pdf`.
-
----
-
-### `server/utils/email.js` — Nodemailer Email Sender
-
-`sendPOEmail({ toEmails, ccEmails, po, pdfPath, internalOnly, approvedByName })` sends a structured HTML email with the PO PDF attached. 
-
-- If vendor email exists: vendor is `To`, internal users (creator + approver) are `CC`
-- If vendor email missing: internal fallback with warning banner
-- Deduplicates To/CC lists
-- Email body includes full PO details table + line items table
-
----
-
-### `server/utils/overdueChecker.js` — Background Job
-
-`startOverdueChecker()` is called once on server boot:
-1. Runs `checkOverdueReceipts()` after a 30-second startup delay (allows DB to settle)
-2. Schedules `setInterval` to re-run every hour (3,600,000ms)
-
-Calls the exported `checkOverdueReceipts` function from the notifications module.
-
----
-
-### `server/utils/validate.js` — Validation Result Handler
-
-Simple helper that calls `validationResult(req)` from express-validator and returns a `422` response with the first validation error if any exist. Used as middleware in routes that define `body()` validators.
-
----
-
-## 6. File Analysis — Frontend
-
-### `client/src/main.jsx` — React Entry Point
-
-Wraps the app in `BrowserRouter` (React Router) and renders `<App />` into `#root`. Imports global `index.css`.
-
----
-
-### `client/src/App.jsx` — Route Tree
-
-Declares all client-side routes using React Router v6 `<Routes>/<Route>`. Structure:
-- Public: `/login`
-- All other routes wrapped in `<ProtectedRoute>` → `<AppLayout>`
-- Routes: `/dashboard`, `/projects/*`, `/purchase-orders/*`, `/vendors/*`, `/elements`, `/categories`, `/dpr/*`, `/invoices`, `/checklist`, `/snaglist`, `/users`, `/notifications`, `/profile`
-- Wildcard `*` redirects to `/dashboard`
-
-On mount, calls `fetchMe()` from `authStore` to re-hydrate session from the existing cookie.
-
----
-
-### `client/src/lib/api.js` — Axios Instance
-
-Creates a configured Axios instance:
-- `baseURL`: `VITE_API_URL` env var or `/api` (relative, picked up by Nginx proxy)
-- `withCredentials: true` — sends cookies on every request
-- Response interceptor: auto-redirects to `/login` on any `401` (except if already on login page)
-
----
-
-### `client/src/lib/utils.js` — Utility Function
-
-Exports `cn(...inputs)`: combines `clsx` + `tailwind-merge` for conditional/merged Tailwind class names. Used throughout all UI components.
-
----
-
-### `client/src/store/authStore.js` — Authentication State (Zustand)
-
-Global auth store with:
-- `user`, `isAuthenticated`, `loading`, `authChecked` state
-- `login(email, password)`: POST `/auth/login`, updates store
-- `fetchMe()`: GET `/auth/me`, called on App mount to rehydrate session from cookie
-- `logout()`: POST `/auth/logout`, clears store, redirects to `/login`
-
----
-
-### `client/src/store/invoiceStore.js` — Invoice State (Zustand)
-
-Dedicated store for invoice data:
-- `fetchInvoices(filters)`: GET with URL query params
-- `createInvoice(formData)`: multipart/form-data POST, prepends to list
-- `updateInvoiceStatus(id, payload)`: PUT for approved/paid toggles
-- `deleteInvoice(id)`: DELETE, filters from local list
-- `addFiles(id, formData)`: POST additional files to invoice
-- `deleteFile(fileId, invoiceId)`: DELETE file, updates nested file array in store
-
----
-
-### `client/src/components/layout/AppLayout.jsx` — App Shell
-
-Provides the persistent layout: collapsible sidebar navigation with role-aware menu items, topbar with notifications bell and user avatar. Contains `<Outlet />` for page content. Responsive design handles both desktop and mobile viewports.
-
----
-
-### `client/src/components/layout/ProtectedRoute.jsx` — Auth Guard
-
-Reads `isAuthenticated` and `authChecked` from `authStore`. Redirects to `/login` if not authenticated after auth check resolves. Renders a loading state while `authChecked` is false (prevents flash of login page on page refresh).
-
----
-
-### `client/src/components/shared/index.jsx` — Shared UI Components
-
-Re-exports and wraps Radix UI primitives with Tailwind styling: `Button`, `Badge`, `Card`, `Input`, `Modal`/`Dialog`, `Select`, `Label`, `Toast`, `Tabs`, `Separator`, `Avatar`, `Switch`, `DropdownMenu`. These form the design system used across all pages.
-
----
-
-### `client/nginx.conf` — Nginx Configuration
-
-- Listens on port 80 inside the container
-- `client_max_body_size 30M` — allows large file uploads
-- `location /`: SPA fallback — all unknown routes serve `index.html`
-- `location /api`: Reverse proxies all API calls to `http://server:5000` (Docker service DNS)
-- `location /uploads`: Proxies static file requests to the backend server
-- Gzip compression enabled for text/CSS/JSON/JS
-
----
-
-## 7. Database Schema
-
-The database comprises **22 tables** across 8 migration files. All primary keys are UUID (`gen_random_uuid()`), all timestamps are `TIMESTAMPTZ`.
-
-### Entity Relationship Overview
-
-```mermaid
-erDiagram
-    users ||--o{ projects : "created_by"
-    users ||--o{ project_team : "user_id"
-    users ||--o{ purchase_orders : "created_by / approved_by / poc"
-    users ||--o{ dprs : "submitted_by"
-    users ||--o{ snags : "reported_by"
-    users ||--o{ notifications : "user_id"
-    users ||--o{ invoices : "uploaded_by"
-
-    projects ||--o{ project_team : "project_id"
-    projects ||--o{ project_contractors : "project_id"
-    projects ||--o{ project_activity_schedule : "project_id"
-    projects ||--o{ project_checklists : "project_id"
-    projects ||--o{ purchase_orders : "project_id"
-    projects ||--o{ dprs : "project_id"
-    projects ||--o{ snags : "project_id"
-    projects ||--o{ invoices : "project_id"
-
-    vendors ||--o{ purchase_orders : "vendor_id"
-    vendors ||--o{ project_contractors : "vendor_id"
-    vendors ||--o{ snags : "vendor_id"
-    vendors ||--o{ invoices : "vendor_id"
-
-    categories ||--o{ elements : "category_id"
-    categories ||--o{ po_line_items : "category_id"
-
-    elements ||--o{ po_line_items : "element_id"
-
-    purchase_orders ||--o{ po_line_items : "po_id"
-    purchase_orders ||--o{ po_goods_receipt : "po_id"
-    purchase_orders ||--o{ notifications : "po_id"
-    purchase_orders ||--o{ invoices : "po_id"
-
-    po_line_items ||--o{ po_goods_receipt : "line_item_id"
-    po_line_items ||--o{ line_item_images : "line_item_id"
-
-    dprs ||--o{ dpr_images : "dpr_id"
-    dprs ||--o{ dpr_voice_notes : "dpr_id"
-
-    checklist_templates ||--o{ checklist_template_items : "template_id"
-    checklist_templates ||--o{ project_checklists : "template_id"
-
-    project_checklists ||--o{ project_checklist_items : "project_checklist_id"
-
-    snags ||--o{ snag_images : "snag_id"
-    snags ||--o{ snag_files : "snag_id"
-
-    invoices ||--o{ invoice_files : "invoice_id"
-
-    activity_schedule_templates ||--o{ project_activity_schedule : "template_id"
+```javascript
+const token = req.cookies?.token || req.headers.authorization?.split(' ')[1];
+const decoded = jwt.verify(token, process.env.JWT_SECRET);
+req.user = decoded;
 ```
 
-### Table Reference
+All routes (except `POST /api/auth/login`) require `authenticate`.
 
-| # | Table | Key Columns | Notes |
-|---|---|---|---|
-| 1 | `users` | id, name, email, password_hash, role, is_active, password_changed_by_user | Roles: admin/manager/employee |
-| 2 | `vendors` | id, name, contact_person, phone, email, address, category, gstin, pan, bank_* | Bank details for PO |
-| 3 | `vendor_categories` | id, name, is_active | Lookup for vendor category dropdown |
-| 4 | `categories` | id, name, is_active | Element categories master |
-| 5 | `elements` | id, name, description, category_id, default_unit, gst_percent, brand_make, is_active | 1,538+ items seeded |
-| 6 | `projects` | id, name, code, client_name, site_address, status, project_type, services_taken, team_lead_3d, team_lead_2d, start_date, end_date | code is UNIQUE |
-| 7 | `project_team` | project_id, user_id | Many-to-many, UNIQUE(project_id, user_id) |
-| 8 | `project_contractors` | project_id, trade, contractor_name, vendor_id, notes | UNIQUE(project_id, trade) — one contractor per trade |
-| 9 | `activity_schedule_templates` | activity_no, milestone_name, phase, step_number, project_type, duration_days, dependency_condition | 405 rows seeded |
-| 10 | `project_activity_schedule` | project_id, template_id, milestone_name, phase, planned/actual dates, status, duration_days | Statuses: pending/in_progress/completed/delayed |
-| 11 | `purchase_orders` | id, po_number, project_id, vendor_id, created_by, order_poc_user_id, status, subtotal, gst_total, total, pdf_path, email_sent, receipt_submitted | Statuses: draft/pending_approval/approved/rejected |
-| 12 | `po_line_items` | po_id, element_id, item_name, category_id, unit, quantity, rate, gst_percent, gst_amount, total, brand_make, is_custom, sort_order | Cascade delete on PO |
-| 13 | `po_goods_receipt` | po_id, line_item_id, received_qty, side_note, submitted_by | UNIQUE(po_id, line_item_id) — upsert |
-| 14 | `line_item_images` | line_item_id, image_url | Max 5 per line item |
-| 15 | `dprs` | project_id, submitted_by, report_date, work_description, progress_summary, work_completed, issues_faced, material_used | UNIQUE(project_id, submitted_by, report_date) |
-| 16 | `dpr_images` | dpr_id, file_url, file_name | Cascade delete on DPR |
-| 17 | `dpr_voice_notes` | dpr_id, file_url, file_name | Cascade delete on DPR |
-| 18 | `checklist_templates` | id, name, created_by | Admin-managed templates |
-| 19 | `checklist_template_items` | template_id, task_name, sort_order | Cascade delete on template |
-| 20 | `project_checklists` | project_id, template_id | Template instantiation |
-| 21 | `project_checklist_items` | project_checklist_id, task_name, is_completed, completed_by, completed_at, sort_order | Cascade delete on checklist |
-| 22 | `snags` | project_id, reported_by, area, item_name, description, status, vendor_id, date_of_confirmation, designer_name, admin_note, resolved_by | Statuses: open/in_review/resolved |
-| 23 | `snag_images` | snag_id, file_url | Cascade delete on snag |
-| 24 | `snag_files` | snag_id, file_url, file_name, file_type, file_size | Cascade delete on snag |
-| 25 | `invoices` | project_id, po_id, vendor_id, uploaded_by, approved, paid | Optional links to project/PO/vendor |
-| 26 | `invoice_files` | invoice_id, file_url, file_name, file_type, file_size | Cascade delete on invoice |
-| 27 | `notifications` | user_id, type, title, body, po_id, is_read | Types: receipt_overdue/discrepancy/po_approved/po_rejected |
+### `server/middleware/role.js` — `authorize(...roles)`
+
+Called **after** `authenticate`. Checks `req.user.role` against the allowed roles array. Returns 403 if the user's role is not in the list.
+
+```javascript
+const authorize = (...roles) => (req, res, next) => {
+  if (!roles.includes(req.user.role)) return res.status(403).json({ ... });
+  next();
+};
+```
+
+Usage pattern: `router.post('/endpoint', authorize('admin', 'manager'), handler)`
+
+### `server/middleware/rateLimiter.js`
+
+`express-rate-limit`: 100 requests per 15-minute window per IP. Uses standard headers (`RateLimit-*`), no legacy `X-RateLimit-*`. Applied globally to `/api` in `index.js`.
+
+### `server/middleware/uploadValidator.js`
+
+Post-multer file validation. Checks:
+- `maxSizeBytes`: rejects files over the limit
+- `allowedMimeTypes`: rejects files with disallowed MIME types
+
+Used on file upload routes after `multer` middleware runs. Responds 400 if validation fails.
 
 ---
 
-## 8. API Endpoint Catalog
+## 7. Database Configuration & Connection Pool
 
-All endpoints are prefixed with `/api`. All except `POST /auth/login` and `POST /auth/logout` require authentication (JWT cookie or Bearer header). Role column shows minimum required role; "any" means any authenticated user.
+### `server/config/db.js`
 
-### Authentication — `/api/auth`
+Uses `pg.Pool` with these settings:
+- `max: 20` connections in pool
+- `idleTimeoutMillis: 30000` — idle connections closed after 30s
+- `connectionTimeoutMillis: 2000` — connection attempt timeout
 
-| Method | Path | Role | Description | Request Body | Response |
-|---|---|---|---|---|---|
-| POST | `/auth/login` | public | Login with email + password | `{ email, password }` | `{ success, user: { id, name, email, role } }` + sets `token` cookie |
-| POST | `/auth/logout` | any | Clear auth cookie | — | `{ success, message }` |
-| GET | `/auth/me` | any | Get current user from DB | — | `{ success, user: { id, name, email, role } }` |
+Exports two things:
+- `query(text, params)` — thin wrapper for `pool.query(text, params)` (parameterized queries)
+- `pool` — raw pool object, used in modules that need transactions via `pool.connect()` → `client.BEGIN/COMMIT/ROLLBACK`
 
-### Users — `/api/users`
-
-| Method | Path | Role | Description | Request Body | Response |
-|---|---|---|---|---|---|
-| GET | `/users` | admin/manager | List all users | — | `{ success, data: [user…] }` |
-| GET | `/users/me` | any | Current user's full profile | — | `{ success, data: user }` |
-| GET | `/users/:id` | admin/manager | Get one user by ID | — | `{ success, data: user }` |
-| POST | `/users` | admin/manager | Create user | `{ name, email, password, role }` | `{ success, data: user }` |
-| PUT | `/users/:id` | admin/manager | Update user | `{ name?, email?, role? }` | `{ success, data: user }` |
-| PATCH | `/users/:id/reset-password` | admin/manager | Admin reset password | `{ password }` | `{ success, message }` |
-| PATCH | `/users/me/change-password` | any (non-admin) | Self one-time change | `{ current_password, new_password }` | `{ success, message }` |
-| PATCH | `/users/:id/toggle` | admin | Toggle is_active | — | `{ success, data: { id, name, is_active } }` |
-| DELETE | `/users/:id` | admin | Hard delete user | — | `{ success, message }` |
-| POST | `/users/import` | admin/manager | Bulk import from XLSX | `multipart: file (xlsx)` | `{ success, data: { created, skipped, errors } }` |
-| GET | `/users/template/download` | admin/manager | Download import template | — | XLSX file download |
-
-### Projects — `/api/projects`
-
-| Method | Path | Role | Description | Request Body | Response |
-|---|---|---|---|---|---|
-| GET | `/projects` | any | List projects | `?status=` | `{ success, data: [project+counts…] }` |
-| GET | `/projects/:id` | any | Full project detail | — | `{ success, data: { ...project, team, contractors, purchase_orders, dprs, checklists, snags } }` |
-| POST | `/projects` | admin/manager | Create project | `{ name, code, client_name, site_address, location, status, project_type, services_taken, team_lead_3d, team_lead_2d, remarks, project_scope, start_date, end_date }` | `{ success, data: project }` |
-| PUT | `/projects/:id` | admin/manager | Update project | (any subset of above) | `{ success, data: project }` |
-| PATCH | `/projects/:id/status` | admin/manager | Update status only | `{ status }` | `{ success, data: { id, name, status } }` |
-| DELETE | `/projects/:id` | admin | Hard delete | — | `{ success, message }` |
-| POST | `/projects/:id/team` | admin/manager | Add team member | `{ user_id }` | `{ success }` |
-| DELETE | `/projects/:id/team/:userId` | admin/manager | Remove team member | — | `{ success }` |
-| POST | `/projects/:id/contractors` | admin/manager | Upsert contractor | `{ trade, contractor_name, vendor_id?, notes? }` | `{ success, data: contractor }` |
-| DELETE | `/projects/:id/contractors/:cid` | admin/manager | Remove contractor | — | `{ success }` |
-| GET | `/projects/:id/schedule` | any | Get activity schedule | — | `{ success, data: [schedule_item…] }` |
-| PATCH | `/projects/:id/schedule/:sid` | any | Update schedule item | `{ actual_start_date?, actual_end_date?, status?, notes? }` | `{ success, data: item }` |
-| POST | `/projects/:id/schedule/generate` | admin/manager | Generate from template | `{ project_type }` | `{ success, data: [items…] }` |
-| POST | `/projects/import` | admin/manager | Bulk import from XLSX | `multipart: file (xlsx)` | `{ success, data: { created, skipped, errors } }` |
-| GET | `/projects/template/download` | admin/manager | Download import template | — | XLSX file download |
-
-### Vendors — `/api/vendors`
-
-| Method | Path | Role | Description | Request Body | Response |
-|---|---|---|---|---|---|
-| GET | `/vendors` | any | List vendors | `?active=true` | `{ success, data: [vendor…] }` |
-| GET | `/vendors/categories` | any | List vendor categories | `?active=true` | `{ success, data: [category…] }` |
-| POST | `/vendors/categories` | admin | Create vendor category | `{ name }` | `{ success, data: category }` |
-| GET | `/vendors/export` | admin/manager | Export all vendors as XLSX | — | XLSX download |
-| GET | `/vendors/template/download` | admin/manager | Import template | — | XLSX download |
-| POST | `/vendors/import` | admin/manager | Bulk import from XLSX | `multipart: file (xlsx)` | `{ success, data: { created, skipped, errors } }` |
-| GET | `/vendors/:id` | any | Vendor detail + last 20 POs | — | `{ success, data: { ...vendor, purchase_orders } }` |
-| POST | `/vendors` | admin/manager | Create vendor | `{ name, contact_person?, phone?, email?, address?, category?, gstin?, pan?, bank_* }` | `{ success, data: vendor }` |
-| PUT | `/vendors/:id` | admin/manager | Update vendor | (any subset of above) | `{ success, data: vendor }` |
-| PATCH | `/vendors/:id/toggle` | admin/manager | Toggle is_active | — | `{ success, data: { id, name, is_active } }` |
-| DELETE | `/vendors/:id` | admin | Hard delete vendor | — | `{ success, message }` |
-
-### Categories — `/api/categories`
-
-| Method | Path | Role | Description | Request Body | Response |
-|---|---|---|---|---|---|
-| GET | `/categories` | any | List element categories | `?active=true` | `{ success, data: [category…] }` |
-| POST | `/categories` | admin | Create element category | `{ name }` | `{ success, data: category }` |
-| PUT | `/categories/:id` | admin | Update category name | `{ name }` | `{ success, data: category }` |
-| PATCH | `/categories/:id/toggle` | admin | Toggle is_active | — | `{ success, data: category }` |
-
-### Elements — `/api/elements`
-
-| Method | Path | Role | Description | Request Body | Response |
-|---|---|---|---|---|---|
-| GET | `/elements` | any | List elements | `?active=true&category_id=&search=` | `{ success, data: [element+category_name…] }` |
-| GET | `/elements/export` | admin/manager | Export all as XLSX | — | XLSX download |
-| GET | `/elements/:id` | any | Get one element | — | `{ success, data: element }` |
-| POST | `/elements` | admin/manager | Create element | `{ name, description?, category_id?, default_unit?, gst_percent?, brand_make? }` | `{ success, data: element }` |
-| PUT | `/elements/:id` | admin/manager | Update element | (any subset of above) | `{ success, data: element }` |
-| PATCH | `/elements/:id/toggle` | admin/manager | Toggle is_active | — | `{ success, data: { id, name, is_active } }` |
-| POST | `/elements/import` | admin/manager | Bulk import from XLSX | `multipart: file (xlsx, multi-sheet)` | `{ success, data: { created, skipped, errors } }` |
-
-### Purchase Orders — `/api/purchase-orders`
-
-| Method | Path | Role | Description | Request Body | Response |
-|---|---|---|---|---|---|
-| GET | `/purchase-orders/vendors-by-category` | any | Filter vendors by element category | `?element_category=` | `{ success, data: [vendor…] }` |
-| GET | `/purchase-orders/elements-by-category` | any | Filter elements by vendor category | `?vendor_category=` | `{ success, data: [element…] }` |
-| POST | `/purchase-orders/line-items/:id/images` | any | Upload images to line item | `multipart: images[] (max 5, 2MB, JPEG/PNG/WEBP)` | `{ success, data: [image…] }` |
-| GET | `/purchase-orders` | any | List POs | `?project_id=&vendor_id=&status=&created_by=` | `{ success, data: [po+names…] }` |
-| GET | `/purchase-orders/:id` | any | Full PO detail | — | `{ success, data: full_po_with_line_items }` |
-| POST | `/purchase-orders` | any | Create PO (draft) | `{ project_id, vendor_id, order_poc_user_id?, work_start_date?, work_end_date?, payment_terms?, other_terms?, line_items: [{element_id?, item_name, description?, category_id?, unit?, quantity, rate, gst_percent?, brand_make?, is_custom?}] }` | `{ success, data: full_po }` |
-| PUT | `/purchase-orders/:id` | any* | Update PO | Same as create | `{ success, data: full_po }` |
-| POST | `/purchase-orders/:id/submit` | any | Submit for approval | — | `{ success, data: po }` |
-| POST | `/purchase-orders/:id/approve` | admin | Approve PO | — | `{ success, data: full_po }` |
-| POST | `/purchase-orders/:id/reject` | admin | Reject PO | `{ comment? }` | `{ success, data: po }` |
-| GET | `/purchase-orders/:id/pdf` | any | Download PO PDF | — | PDF file (approved only) |
-| DELETE | `/purchase-orders/:id` | admin | Hard delete PO | — | `{ success, message }` |
-| POST | `/purchase-orders/:id/receipt` | any | Submit goods receipt | `{ items: [{ line_item_id, received_qty, side_note? }] }` | `{ success, data: full_po }` |
-
-> *Update is gated at controller level: draft POs by any user; pending_approval only by admin.
-
-### DPR — `/api/dpr`
-
-| Method | Path | Role | Description | Request Body | Response |
-|---|---|---|---|---|---|
-| GET | `/dpr` | any | List DPRs | `?project_id=&user_id=&date=` | `{ success, data: [dpr+names…] }` |
-| GET | `/dpr/:id` | any | DPR detail + media | — | `{ success, data: { ...dpr, images, voice_notes } }` |
-| POST | `/dpr` | any | Submit DPR | `multipart: project_id, report_date, work_description, progress_summary, work_completed, issues_faced, material_used, images[] (max 10), voice[] (max 3)` | `{ success, data: dpr }` |
-| DELETE | `/dpr/:id` | admin | Delete DPR + media | — | `{ success, message }` |
-
-### Checklist — `/api/checklist`
-
-| Method | Path | Role | Description | Request Body | Response |
-|---|---|---|---|---|---|
-| GET | `/checklist/templates` | any | List templates | — | `{ success, data: [template…] }` |
-| GET | `/checklist/templates/:id` | any | Template with items | — | `{ success, data: { ...template, items } }` |
-| POST | `/checklist/templates` | admin | Create template | `{ name, items: [task_name…] }` | `{ success, data: template }` |
-| GET | `/checklist/project/:projectId` | any | Project checklists | — | `{ success, data: [checklist+items…] }` |
-| POST | `/checklist/project/:projectId/assign` | admin/manager | Assign template to project | `{ template_id }` | `{ success, data: checklist }` |
-| PATCH | `/checklist/items/:itemId` | any | Toggle item completion | `{ is_completed }` | `{ success, data: item }` |
-
-### Snag List — `/api/snaglist`
-
-| Method | Path | Role | Description | Request Body | Response |
-|---|---|---|---|---|---|
-| GET | `/snaglist` | any | List snags | `?project_id=&status=` | `{ success, data: [snag+names…] }` |
-| GET | `/snaglist/:id` | any | Snag detail + media | — | `{ success, data: { ...snag, images, files } }` |
-| POST | `/snaglist` | any | Log new snag | `multipart: project_id, area, item_name, description, designer_name, images[] (max 10), files[] (max 5)` | `{ success, data: snag }` |
-| PATCH | `/snaglist/:id` | admin/manager | Review snag | `{ status?, admin_note?, vendor_id?, date_of_confirmation?, date_of_material_supply? }` | `{ success, data: snag }` |
-| DELETE | `/snaglist/:id` | admin | Delete snag | — | `{ success, message }` |
-
-### Activity Schedule — `/api/activity-schedule`
-
-| Method | Path | Role | Description | Request Body | Response |
-|---|---|---|---|---|---|
-| GET | `/activity-schedule/templates` | any | List schedule templates | `?project_type=` | `{ success, data: [template…] }` |
-| GET | `/activity-schedule/project-types` | any | List valid project types | — | `{ success, data: [type…] }` |
-
-### Invoices — `/api/invoices`
-
-| Method | Path | Role | Description | Request Body | Response |
-|---|---|---|---|---|---|
-| GET | `/invoices` | any | List invoices | `?project_id=&vendor_id=&po_id=` | `{ success, data: [invoice+files…] }` |
-| POST | `/invoices` | any | Create invoice | `multipart: project_id?, po_id?, vendor_id?, files[] (max 20, 30MB each)` | `{ success, data: invoice+files }` |
-| PUT | `/invoices/:id` | admin | Update approval/payment | `{ approved?, paid? }` | `{ success, data: invoice+files }` |
-| DELETE | `/invoices/:id` | admin | Delete invoice | — | `{ success, message }` |
-| POST | `/invoices/:id/files` | any | Add files to invoice | `multipart: files[] (max 20, 30MB each)` | `{ success, data: invoice+files }` |
-| DELETE | `/invoices/files/:fileId` | admin | Delete single file | — | `{ success, message }` |
-
-### Notifications — `/api/notifications`
-
-| Method | Path | Role | Description | Request Body | Response |
-|---|---|---|---|---|---|
-| GET | `/notifications` | any | Get user's notifications (last 50) | — | `{ success, data: [notification+po+project…] }` |
-| GET | `/notifications/unread-count` | any | Unread count | — | `{ success, count: N }` |
-| PATCH | `/notifications/:id/read` | any | Mark one as read | — | `{ success }` |
-| PATCH | `/notifications/read-all` | any | Mark all as read | — | `{ success }` |
-| POST | `/notifications/check-overdue` | admin | Trigger overdue check | — | `{ success, notified: N }` |
-
-### Health — `/api/health`
-
-| Method | Path | Role | Description |
-|---|---|---|---|
-| GET | `/health` | public | Server health check | Returns `{ status: 'ok', timestamp }` |
-
----
-
-## 9. Data Flow Diagrams
-
-### Purchase Order Approval Flow
-
-```mermaid
-sequenceDiagram
-    participant U as Employee/Manager
-    participant FE as React Frontend
-    participant API as Express API
-    participant DB as PostgreSQL
-    participant PDF as Puppeteer
-    participant SMTP as Gmail SMTP
-
-    U->>FE: Fill PO form (project, vendor, line items)
-    FE->>API: POST /api/purchase-orders
-    API->>DB: INSERT purchase_orders (status=draft)
-    API->>DB: INSERT po_line_items (×N)
-    API->>DB: UPDATE totals (subtotal/gst/total)
-    API-->>FE: { success, data: full_po }
-
-    U->>FE: Click "Submit for Approval"
-    FE->>API: POST /api/purchase-orders/:id/submit
-    API->>DB: UPDATE status=pending_approval, submitted_at=NOW()
-    API-->>FE: { success, data: po }
-
-    Note over U,API: Admin reviews PO
-
-    U->>FE: Click "Approve"
-    FE->>API: POST /api/purchase-orders/:id/approve
-    API->>DB: Fetch full PO (JOIN project + vendor + line items + images)
-    API->>PDF: generatePOPdf(po)
-    PDF->>PDF: Build 2-page HTML, launch Chromium, render PDF
-    PDF-->>API: /uploads/po-pdfs/PO-XX-XX-NNNNN.pdf
-    API->>DB: UPDATE status=approved, pdf_path, approved_at, approved_by
-    API->>DB: INSERT notification (type=po_approved, user=creator)
-    API->>SMTP: sendPOEmail(vendor, CC: creator+admin, attach PDF)
-    API->>DB: UPDATE email_sent=true (async)
-    API-->>FE: { success, data: full_po }
-
-    Note over U,API: Supervisor submits goods receipt
-
-    U->>FE: Submit received quantities
-    FE->>API: POST /api/purchase-orders/:id/receipt
-    API->>DB: BEGIN TRANSACTION
-    API->>DB: UPSERT po_goods_receipt (×N line items)
-    API->>DB: UPDATE receipt_submitted=true
-    API->>DB: COMMIT
-    API->>DB: Check quantity discrepancies
-    alt Discrepancies found
-        API->>DB: INSERT notification (type=discrepancy, user=each admin)
-    end
-    API-->>FE: { success, data: full_po }
+**Transaction pattern used throughout the codebase:**
+```javascript
+const client = await db.pool.connect();
+try {
+  await client.query('BEGIN');
+  // ... multiple queries
+  await client.query('COMMIT');
+} catch (err) {
+  await client.query('ROLLBACK');
+  throw err;
+} finally {
+  client.release();  // Always release back to pool
+}
 ```
 
-### DPR Submission Flow
-
-```mermaid
-sequenceDiagram
-    participant U as Employee/Manager
-    participant FE as React Frontend
-    participant API as Express API
-    participant FS as Filesystem (uploads/)
-    participant DB as PostgreSQL
-
-    U->>FE: Fill DPR form + attach images/voice
-    FE->>API: POST /api/dpr (multipart/form-data)
-    API->>API: Multer: route images→dpr-images/, audio→dpr-voice/
-    API->>API: uploadValidator: check MIME + size
-    API->>DB: INSERT dprs (UNIQUE: project+user+date)
-    loop Each image file
-        API->>FS: Save UUID-named file
-        API->>DB: INSERT dpr_images (dpr_id, /uploads/dpr-images/UUID.ext)
-    end
-    loop Each voice file
-        API->>FS: Save UUID-named file
-        API->>DB: INSERT dpr_voice_notes
-    end
-    API-->>FE: { success, data: dpr }
-```
-
-### Overdue Receipt Background Job
-
-```mermaid
-sequenceDiagram
-    participant SRV as Server Startup
-    participant OC as overdueChecker.js
-    participant DB as PostgreSQL
-
-    SRV->>OC: startOverdueChecker()
-    Note over OC: Wait 30 seconds
-    OC->>DB: SELECT approved POs where receipt_submitted=false AND approved_at < NOW()-8days
-    loop Each overdue PO
-        OC->>DB: SELECT all admin users
-        loop Each recipient (creator + admins, deduplicated)
-            OC->>DB: Check: notification created in last 24h?
-            alt No recent notification
-                OC->>DB: INSERT notification (type=receipt_overdue)
-            end
-        end
-    end
-    Note over OC: Every 1 hour, repeat
+**Query pattern (parameterized, SQL-injection safe):**
+```javascript
+db.query('SELECT * FROM users WHERE id = $1', [userId])
 ```
 
 ---
 
-## 10. Security Architecture
+## 8. Auto-Migration System
 
-### Authentication Flow
+### `server/db/autoMigrate.js`
 
-```mermaid
-flowchart TD
-    A[Browser Request] --> B{Cookie token?}
-    B -- No --> C{Authorization header?}
-    C -- No --> D[401 Not Authenticated]
-    C -- Yes --> E[Extract Bearer token]
-    B -- Yes --> E
-    E --> F[jwt.verify with JWT_SECRET]
-    F -- Invalid/Expired --> G[401 Invalid token]
-    F -- Valid --> H[Attach req.user]
-    H --> I{Route has authorize?}
-    I -- No --> J[Proceed to controller]
-    I -- Yes --> K{req.user.role in allowed roles?}
-    K -- No --> L[403 Access Denied]
-    K -- Yes --> J
+Runs **every time the server starts** (called in `index.js` after `app.listen`). All operations use `IF NOT EXISTS` or `DROP CONSTRAINT IF EXISTS` so they are **idempotent** — safe to run multiple times.
+
+Applies:
+1. Extends `project_activity_schedule` with stage-engine columns (`weight`, `assigned_to`, `attachment_url`, `phase_group`, `created_by`, `updated_by`, `created_at`, `updated_at`)
+2. Replaces the `status` check constraint to include `'blocked'` (was missing from original schema)
+3. Creates `stage_templates` table (if not exists)
+4. Creates `stage_template_items` table (if not exists)
+5. Creates `audit_logs` table (if not exists)
+6. Adds `drive_link TEXT` column to `project_activity_schedule` (if not exists)
+7. Creates performance indexes on `audit_logs` and `project_activity_schedule`
+
+**Why autoMigrate vs numbered SQL files:** The numbered SQL files in `migrations/` are run by Docker's `docker-entrypoint-initdb.d` only on the **first container creation** (when the data volume is empty). For patches that need to be applied to existing live databases, `autoMigrate.js` is the mechanism — it runs on every server boot and is safe to run on databases that already have these columns/tables.
+
+---
+
+## 9. Backend Modules — Complete Reference
+
+### 9.1 Auth Module (`/api/auth`)
+
+**Routes:** `server/modules/auth/auth.routes.js`
+**Controller:** `server/modules/auth/auth.controller.js`
+
+No `authenticate` middleware on any auth route (they are public).
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/api/auth/login` | Public | Email+password login, sets JWT cookie |
+| POST | `/api/auth/logout` | Public | Clears `token` cookie |
+| GET | `/api/auth/me` | `authenticate` | Returns current user from DB |
+
+**Login flow:**
+1. Look up user by email (case-insensitive via `.toLowerCase()`)
+2. Check `is_active = true` — inactive users cannot log in
+3. `bcrypt.compare(password, user.password_hash)`
+4. Sign JWT: `{ id, role, name, email }` with `JWT_SECRET`, expiry `JWT_EXPIRES_IN` (default 7d)
+5. Set httpOnly cookie `token` — `secure: true` only in production+HTTPS, `sameSite: lax`
+6. Return `{ success: true, user: { id, name, email, role } }`
+
+**Cookie security settings:**
+```javascript
+{ httpOnly: true, secure: NODE_ENV==='production' && isHttpsClient, sameSite: 'lax', maxAge: 7days }
 ```
 
-### Security Measures Summary
+---
 
-| Layer | Measure | Detail |
-|---|---|---|
-| HTTP Headers | Helmet.js | X-Frame-Options, X-Content-Type-Options, CSP, HSTS (production) |
-| CORS | Origin allowlist | Only origins listed in `CLIENT_URL` env var allowed |
-| Rate Limiting | express-rate-limit | 100 requests per 15-minute window per IP, applied to all `/api` routes |
-| Authentication | JWT + httpOnly cookie | 7-day expiry; `secure: true` in production HTTPS; `sameSite: 'lax'` |
-| Authorization | RBAC middleware | 3 roles (admin/manager/employee); `authorize(...roles)` factory applied per route |
-| Password Storage | bcrypt | Cost factor 10 (~300ms); never returned in responses |
-| File Upload | Multer + uploadValidator | MIME type whitelist + file size limits per endpoint |
-| SQL | Parameterised queries | All DB queries use `$1, $2` placeholders via `pg` pool — no string interpolation |
-| Input Validation | express-validator | Email format, required fields, enum values validated before controller |
-| Self-deletion guard | Controller check | Users cannot delete their own account |
-| PO edit lock | Controller check | Non-admin users cannot edit POs beyond `draft` status |
-| Referential guards | Controller pre-checks | Cannot delete projects/vendors with linked POs |
+### 9.2 Users Module (`/api/users`)
+
+**Routes:** `server/modules/users/users.routes.js`
+**Controller:** `server/modules/users/users.controller.js`
+
+All routes require `authenticate`. Role restrictions as noted.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/users` | admin, manager | List all users |
+| GET | `/api/users/me` | any | Current user's own profile |
+| GET | `/api/users/:id` | admin, manager | Get one user by ID |
+| POST | `/api/users` | admin, manager | Create user (validates name/email/password/role) |
+| PUT | `/api/users/:id` | admin, manager | Update user name/email/role |
+| PATCH | `/api/users/:id/reset-password` | admin, manager | Force-reset any user's password |
+| PATCH | `/api/users/me/change-password` | any | Self password change (requires current_password) |
+| PATCH | `/api/users/:id/toggle` | admin | Toggle user active/inactive status |
+| DELETE | `/api/users/:id` | admin | Hard delete user |
+| POST | `/api/users/import` | admin, manager | Bulk import users from Excel |
+| GET | `/api/users/template/download` | admin, manager | Download Excel import template |
+
+**Important route ordering note:** `GET /api/users/me` is defined before `GET /api/users/:id` so Express matches `/me` literally, not as `:id = "me"`.
 
 ---
 
-## 11. Deployment Architecture
+### 9.3 Projects Module (`/api/projects`)
 
-```mermaid
-graph LR
-    subgraph "Host Machine (Windows/Linux/Mac)"
-        DC[docker-compose.yml]
-        ENV[.env file\nSecrets]
-        VOL_DB[(postgres_data\nDocker Volume)]
-        VOL_UP[(./server/uploads\nBind Mount)]
-    end
+**Routes:** `server/modules/projects/projects.routes.js`
+**Controller:** `server/modules/projects/projects.controller.js`
 
-    subgraph "Docker Network: xclusive_net"
-        PG[postgres:15-alpine\nxclusive_db\nPort 5432 internal]
-        SRV[Node.js Express\nxclusive_server\nPort 5000]
-        CLI[Nginx + React SPA\nxclusive_client\nPort 3000→80]
-    end
+This is the largest module. All routes require `authenticate`.
 
-    DC -- "orchestrates" --> PG
-    DC -- "orchestrates" --> SRV
-    DC -- "orchestrates" --> CLI
-    ENV -- "env_file" --> PG
-    ENV -- "env_file" --> SRV
-    ENV -- "build arg VITE_API_URL" --> CLI
-    VOL_DB -- "mount" --> PG
-    VOL_UP -- "bind mount" --> SRV
+#### Project CRUD
 
-    PG -- "pg.Pool DB_HOST=postgres" --> SRV
-    SRV -- "API calls" --> CLI
-    CLI -- "depends_on" --> SRV
-    SRV -- "depends_on (health check)" --> PG
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/projects` | any | List all projects (+ PO/DPR counts). Filter by `?status=` |
+| GET | `/api/projects/:id` | any | Full project detail: team, contractors, POs, DPRs, checklists, snags |
+| POST | `/api/projects` | admin, manager | Create project |
+| PUT | `/api/projects/:id` | admin, manager | Update project fields |
+| PATCH | `/api/projects/:id/status` | admin, manager | Quick status update (with audit log) |
+| DELETE | `/api/projects/:id` | admin | Hard delete (blocked if linked POs exist) |
+
+#### Team Management
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| PUT | `/api/projects/:id/team/bulk` | admin, manager | Replace entire team with new `user_ids[]` array |
+| POST | `/api/projects/:id/team` | admin, manager | Add single team member |
+| DELETE | `/api/projects/:id/team/:userId` | admin, manager | Remove team member |
+
+#### Contractors
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/api/projects/:id/contractors` | admin, manager | Upsert contractor by trade (ON CONFLICT trade) |
+| DELETE | `/api/projects/:id/contractors/:cid` | admin, manager | Remove contractor |
+
+#### Legacy Activity Schedule (kept for compatibility)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/projects/:id/schedule` | any | List schedule items for project |
+| PATCH | `/api/projects/:id/schedule/:sid` | any | Update schedule item (actual dates, status, notes) |
+| POST | `/api/projects/:id/schedule/generate` | admin, manager | Generate schedule from activity templates by project_type |
+
+#### Stage Engine (primary project progress system)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/projects/:id/stages` | any | Get stages + progress (total, completed, % weighted) |
+| POST | `/api/projects/:id/stages` | admin, manager | Create a new stage |
+| PUT | `/api/projects/:id/stages/:sid` | **any** | Update stage (status, dates, notes, drive_link, etc.) |
+| DELETE | `/api/projects/:id/stages/:sid` | admin, manager | Delete stage |
+| POST | `/api/projects/:id/stages/apply-template` | admin, manager | Apply standard or custom template |
+
+**Critical note on stage update permissions:** `PUT /api/projects/:id/stages/:sid` has NO `authorize()` middleware — any authenticated user (including employees/field staff) can update stage fields including status, notes, and drive_link. This is intentional: field staff mark stages done and add Drive folder links.
+
+#### Kanban Drag/Drop
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/api/projects/:id/advance-column` | any | Drag project card to a column: forward completes prior phases, backward resets later phases |
+
+#### Stage Templates
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/projects/stage-templates` | any | List all custom stage templates |
+| POST | `/api/projects/stage-templates` | admin, manager | Create custom template with items |
+| GET | `/api/projects/stage-templates/sample` | any | Download Excel sample template file |
+| POST | `/api/projects/stage-templates/import` | admin, manager | Import template from Excel/CSV |
+
+#### Tracker & Admin
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/projects/tracker` | any | Full Kanban data: all projects enriched with stages, progress, column assignment |
+| GET | `/api/projects/audit-logs` | admin, manager | Audit log list (filter by entity_type, entity_id) |
+| POST | `/api/projects/import` | admin, manager | Bulk import projects from Excel |
+| GET | `/api/projects/template/download` | admin, manager | Download Excel project import template |
+
+#### Stage Engine Business Logic
+
+**Progress calculation:** Each stage has a `weight` (default 1.0). If any stage has a non-default weight, weighted progress is used: `sum(completed_weights) / sum(all_weights) * 100`. Otherwise, simple count: `completed / total * 100`.
+
+**Kanban column assignment (`getProjectKanbanColumn`):**
+1. If project status is 'completed' → "Completed"
+2. If no stages → "Not Started"
+3. If any stage is `in_progress` → column of the latest `in_progress` stage (by sort_order)
+4. If no in_progress → first phase (in master order) that has any non-completed stages
+5. Master phase order: Furniture Layout → Estimation → 3D Design → 2D Drawings → Execution - Civil → Execution → Handover
+
+**Drag-forward:** Completes all stages in phases BEFORE the target column. If target is "Completed", also sets `projects.status = 'completed'`.
+**Drag-backward:** Resets all stages in phases AFTER the target column back to `pending`.
+
+**Audit logging (`logAudit`):** Called after stage create/update/delete, team changes, status changes, template applications. Writes to `audit_logs` table. Non-fatal (errors are logged but don't block the response).
+
+---
+
+### 9.4 Purchase Orders Module (`/api/purchase-orders`)
+
+**Routes:** `server/modules/purchase-orders/po.routes.js`
+**Controller:** `server/modules/purchase-orders/po.controller.js`
+
+All routes require `authenticate`.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/purchase-orders` | any | List POs (filter by status, project, vendor) |
+| GET | `/api/purchase-orders/:id` | any | Full PO detail with line items, images, receipt |
+| POST | `/api/purchase-orders` | any | Create PO (draft status) |
+| PUT | `/api/purchase-orders/:id` | any | Update PO (only draft/rejected) |
+| POST | `/api/purchase-orders/:id/submit` | any | Submit PO for approval (draft → submitted) |
+| POST | `/api/purchase-orders/:id/approve` | admin | Approve PO (submitted → approved); triggers email |
+| POST | `/api/purchase-orders/:id/reject` | admin | Reject PO (→ rejected); triggers email |
+| GET | `/api/purchase-orders/:id/pdf` | any | Download PO as PDF |
+| DELETE | `/api/purchase-orders/:id` | admin | Hard delete PO |
+| POST | `/api/purchase-orders/:id/receipt` | any | Submit goods receipt with challan image |
+| POST | `/api/purchase-orders/:id/verify-receipt` | admin | Verify/confirm goods receipt |
+| GET | `/api/purchase-orders/:id/receipt-pdf` | any | Download receipt summary PDF |
+| POST | `/api/purchase-orders/line-items/:id/images` | any | Upload image(s) to a line item |
+| GET | `/api/purchase-orders/vendors-by-category` | any | Vendors filtered by element category |
+| GET | `/api/purchase-orders/elements-by-category` | any | Elements filtered by vendor category |
+
+**PO Status Machine:**
+```
+draft → submitted → approved → (receipt_submitted=true) → verified
+      ↗ rejected ←
+```
+- Approval/rejection: triggers nodemailer email to PO creator
+- Goods receipt: `receipt_submitted = true`, stores challan image path
+- Receipt verification: `receipt_verified = true`, `receipt_verified_at`, `receipt_verified_by`
+
+---
+
+### 9.5 Vendors Module (`/api/vendors`)
+
+All routes require `authenticate`.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/vendors` | any | List vendors (filter by is_active, category) |
+| GET | `/api/vendors/:id` | any | Vendor detail |
+| POST | `/api/vendors` | admin, manager | Create vendor |
+| PUT | `/api/vendors/:id` | admin, manager | Update vendor |
+| DELETE | `/api/vendors/:id` | admin | Delete vendor |
+| POST | `/api/vendors/import` | admin, manager | Bulk import from Excel |
+| GET | `/api/vendors/template/download` | admin, manager | Download Excel template |
+
+---
+
+### 9.6 Categories Module (`/api/categories`)
+
+All routes require `authenticate`.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/categories` | any | List all categories |
+| POST | `/api/categories` | admin | Create category |
+| PUT | `/api/categories/:id` | admin | Update category |
+| DELETE | `/api/categories/:id` | admin | Delete category |
+
+---
+
+### 9.7 Elements Module (`/api/elements`)
+
+All routes require `authenticate`.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/elements` | any | List elements (filter by category_id, search) |
+| GET | `/api/elements/:id` | any | Element detail |
+| POST | `/api/elements` | admin, manager | Create element |
+| PUT | `/api/elements/:id` | admin, manager | Update element |
+| DELETE | `/api/elements/:id` | admin | Delete element |
+| POST | `/api/elements/import` | admin, manager | Bulk import from Excel |
+| GET | `/api/elements/template/download` | admin, manager | Download Excel template |
+
+---
+
+### 9.8 DPR Module (`/api/dpr`)
+
+All routes require `authenticate`. Controller is inline in routes file.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/dpr` | any | List DPRs. Employees see only their own. |
+| GET | `/api/dpr/:id` | any | DPR detail with images and voice notes |
+| POST | `/api/dpr` | any | Submit DPR with up to 10 images + 3 voice notes (20MB each) |
+| DELETE | `/api/dpr/:id` | admin | Delete DPR (cascades images + voice notes) |
+
+**File storage:** Images → `server/uploads/dpr-images/`, Voice → `server/uploads/dpr-voice/`. Random UUID filenames.
+**Employee scope:** `GET /api/dpr` automatically filters by `submitted_by = req.user.id` for role 'employee'.
+
+---
+
+### 9.9 Checklist Module (`/api/checklist`)
+
+All routes require `authenticate`. Controller is inline in routes file.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/checklist/templates` | any | List all checklist templates |
+| GET | `/api/checklist/templates/:id` | any | Template detail with items |
+| POST | `/api/checklist/templates` | admin | Create template |
+| GET | `/api/checklist/project/:projectId` | any | Get all checklists for a project (with items) |
+| POST | `/api/checklist/project/:projectId/assign` | admin, manager | Assign template to project (creates instance) |
+| PATCH | `/api/checklist/items/:itemId` | any | Mark checklist item complete/incomplete |
+
+---
+
+### 9.10 Snag List Module (`/api/snaglist`)
+
+All routes require `authenticate`. Controller is inline.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/snaglist` | any | List snags. Employees see only their own. |
+| GET | `/api/snaglist/:id` | any | Snag detail with images and files |
+| POST | `/api/snaglist` | any | Create snag with up to 10 images + 5 files |
+| PATCH | `/api/snaglist/:id` | admin, manager | Update snag (status, admin_note, vendor, dates) |
+| DELETE | `/api/snaglist/:id` | admin | Hard delete snag |
+
+**File types allowed:** JPEG, PNG, WebP, GIF, PDF, DOC/DOCX, XLS/XLSX. Max 20MB per file.
+**Employee scope:** `GET /api/snaglist` filters by `reported_by = req.user.id` for employees.
+
+---
+
+### 9.11 Invoices Module (`/api/invoices`)
+
+All routes require `authenticate`.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/invoices` | any | List invoices (with file attachments) |
+| POST | `/api/invoices` | any | Create invoice with up to 20 files (30MB each) |
+| PUT | `/api/invoices/:id` | admin | Update invoice status |
+| DELETE | `/api/invoices/:id` | admin | Hard delete invoice |
+| POST | `/api/invoices/:id/files` | any | Add more files to existing invoice |
+| DELETE | `/api/invoices/files/:fileId` | admin | Delete a single invoice file |
+
+**File storage:** `server/uploads/invoices/`. No MIME restriction — `uploadValidator` is called with only `maxSizeBytes: 30MB`.
+
+---
+
+### 9.12 Notifications Module (`/api/notifications`)
+
+All routes require `authenticate`. Controller is inline.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/notifications` | any | Last 50 notifications for current user (with PO + project name) |
+| GET | `/api/notifications/unread-count` | any | Unread notification count for current user |
+| PATCH | `/api/notifications/:id/read` | any | Mark one notification as read (user_id check prevents cross-user) |
+| PATCH | `/api/notifications/read-all` | any | Mark all current user's notifications as read |
+| POST | `/api/notifications/check-overdue` | admin | Manual trigger: run overdue receipt check |
+
+**Notification types:** `receipt_overdue` (day 8+, notifies creator + all admins), `receipt_reminder` (day 6-7, notifies creator only).
+**Route ordering note:** `PATCH /read-all` comes after `PATCH /:id/read` in source, but `/:id/read` requires TWO path segments so there is no conflict. Express will correctly match `/read-all` because it doesn't match `/:id/read`'s two-segment pattern.
+
+---
+
+### 9.13 Activity Schedule Module (`/api/activity-schedule`)
+
+All routes require `authenticate`. Templates are read-only for non-admins.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/activity-schedule/templates` | any | List activity templates (filter by `?project_type=`) |
+| GET | `/api/activity-schedule/project-types` | any | Static list of all project types |
+
+**Note:** The 45 activity schedule templates (from ABJ Combined Activity Schedule Excel) are seeded in `002_seed.sql`. They cover 15 project types (2BHK through >6BHK Bungalow, Commercial) with phases: Furniture Layout, Estimation, 3D Design, 2D Drawings, Execution - Civil, Execution.
+
+---
+
+### 9.14 Utility Files
+
+**`server/utils/email.js`** — Nodemailer transporter using Gmail SMTP with app password. Functions: `sendPOApprovalEmail(po, toEmail)`, `sendPORejectionEmail(po, toEmail, reason)`. Called from PO controller on approve/reject.
+
+**`server/utils/overdueChecker.js`** — `startOverdueChecker()` uses `setInterval` (every few hours) to query for approved POs where `receipt_submitted = false` and `approved_at < NOW() - INTERVAL '8 days'`. Creates `receipt_overdue` notifications. Also checks 6-day window for `receipt_reminder`. Started from `index.js` after `autoMigrate` completes.
+
+**`server/utils/pdf.js`** — Uses `pdfkit` to generate PDFs. `generatePOPdf(po, res)` streams a formatted PO PDF directly to the HTTP response. `generateReceiptPdf(po, res)` generates the goods receipt summary PDF. Includes company letterhead, line item tables, GST breakdown, signatures section.
+
+**`server/utils/validate.js`** — Reads `validationResult(req)` from `express-validator`. If errors exist, returns `400 { success: false, message, errors }`.
+
+---
+
+## 10. Frontend Architecture
+
+### 10.1 Application Bootstrap (`client/src/main.jsx`)
+
+```javascript
+// BrowserRouter → QueryClientProvider → App
+ReactDOM.render(
+  <BrowserRouter>
+    <QueryClientProvider client={queryClient}>
+      <App />
+    </QueryClientProvider>
+  </BrowserRouter>
+)
 ```
 
-### Container Configuration
+`QueryClient` is configured with default staleTime and retry settings (see `main.jsx` for exact config).
 
-| Container | Image | Ports | Health Check | Restart |
-|---|---|---|---|---|
-| `xclusive_db` | `postgres:15-alpine` | 5432 (internal) | `pg_isready -U $DB_USER` every 5s | always |
-| `xclusive_server` | Custom (node:18-alpine) | `5000:5000` | Depends on postgres healthy | always |
-| `xclusive_client` | Custom (nginx:alpine) | `3000:80` | Depends on server running | always |
+### 10.2 HTTP Client (`client/src/lib/api.js`)
 
-### Environment Variables
+Axios instance with:
+- `baseURL: import.meta.env.VITE_API_URL || '/api'` — In production Docker build, `VITE_API_URL=/api` (relative) so Nginx handles routing. In local dev, Vite's proxy config forwards `/api` to `localhost:5000`.
+- `withCredentials: true` — Sends the JWT cookie on every request
+- Response interceptor: If status is 401 and not on `/login`, redirect to `/login` (automatic session expiry handling)
 
-| Variable | Used By | Purpose |
-|---|---|---|
-| `DB_HOST` | server | PostgreSQL hostname (= `postgres` in Docker) |
-| `DB_PORT` | server | PostgreSQL port (default 5432) |
-| `DB_USER` | server + postgres | Database username |
-| `DB_PASSWORD` | server + postgres | Database password |
-| `DB_NAME` | server + postgres | Database name |
-| `JWT_SECRET` | server | JWT signing key (min 32 chars recommended) |
-| `JWT_EXPIRES_IN` | server | JWT expiry (default `7d`) |
-| `GMAIL_USER` | server | Gmail account for outgoing email |
-| `GMAIL_APP_PASSWORD` | server | Gmail App Password (16 chars, 2FA required) |
-| `CLIENT_URL` | server | Comma-separated CORS allowlist |
-| `VITE_API_URL` | client (build arg) | Backend API URL baked into the SPA at build time |
-| `COMPANY_NAME` | server | Used in PDF header + email sender |
-| `COMPANY_ADDRESS` | server | Used in PO PDF bill-to block |
-| `COMPANY_GSTIN` | server | Used in PO PDF |
-| `PUPPETEER_EXECUTABLE_PATH` | server | Override Chromium path (optional, auto-detected) |
+All API calls in the app use this instance: `api.get(...)`, `api.post(...)`, etc.
 
----
+### 10.3 Auth Store (`client/src/store/authStore.js`)
 
-## 12. Third-Party Integrations
+Zustand store with:
+- `user` state: `null` or `{ id, name, email, role }`
+- `login(credentials)` — calls `POST /api/auth/login`, sets `user`
+- `logout()` — calls `POST /api/auth/logout`, clears `user`
+- `fetchMe()` — calls `GET /api/auth/me`, sets `user` (called in `App.jsx` `useEffect` on mount to rehydrate session)
 
-### Gmail SMTP (Nodemailer)
+Used throughout app via `const { user } = useAuthStore()`. Role-based UI logic is done via `user?.role` checks.
 
-- **Trigger**: Automatically invoked when a PO is approved
-- **Configuration**: `service: 'gmail'` with `GMAIL_USER` + `GMAIL_APP_PASSWORD` (Google App Password — requires 2FA)
-- **Email content**: HTML email with PO details table, line items table, and PDF attachment
-- **Recipient logic**: Primary `To` is vendor email; internal users (creator + approver) in `CC`. If vendor has no email, internal fallback with banner warning
-- **Failure mode**: Non-fatal — email failure is logged to console but does not roll back PO approval
-- **Tracking**: `email_sent` flag updated on PO record after successful delivery
+### 10.4 Protected Route (`client/src/components/layout/ProtectedRoute.jsx`)
 
-### Puppeteer / Headless Chromium
+Checks `useAuthStore()`. If user is null AND loading is done, redirects to `/login`. Wraps all authenticated routes in `App.jsx`.
 
-- **Trigger**: During PO approval workflow
-- **Purpose**: Generates a 2-page A4 PDF matching Xclusive Interiors' standard PO format
-- **Docker note**: Launched with `--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu` for Alpine Linux compatibility
-- **Image embedding**: Line item reference images are read from disk and embedded as base64 data URIs to ensure offline PDF rendering
+### 10.5 App Routing (`client/src/App.jsx`)
 
-### PostgreSQL (via node-postgres)
-
-- **Connection**: Single `pg.Pool` with max 20 connections, shared across all modules
-- **Transactions**: Used explicitly in goods receipt submission (`BEGIN/COMMIT/ROLLBACK` via `pool.connect()`)
-- **Migrations**: Run as Docker init scripts (`/docker-entrypoint-initdb.d/`) — executed once on first container start
-
----
-
-## 13. Role & Permission Matrix
-
-| Feature | Employee | Manager | Admin |
-|---|---|---|---|
-| **Login / View dashboard** | ✅ | ✅ | ✅ |
-| **View own profile + change password** | ✅ | ✅ | ✅ |
-| **View projects** | ✅ | ✅ | ✅ |
-| **Create/Edit projects** | ❌ | ✅ | ✅ |
-| **Delete projects** | ❌ | ❌ | ✅ |
-| **Manage project team/contractors** | ❌ | ✅ | ✅ |
-| **Generate activity schedule** | ❌ | ✅ | ✅ |
-| **View vendors** | ✅ | ✅ | ✅ |
-| **Create/Edit vendors** | ❌ | ✅ | ✅ |
-| **Delete vendors** | ❌ | ❌ | ✅ |
-| **Import/Export vendors** | ❌ | ✅ | ✅ |
-| **Manage vendor categories** | ❌ | ❌ | ✅ |
-| **View elements** | ✅ | ✅ | ✅ |
-| **Create/Edit elements** | ❌ | ✅ | ✅ |
-| **Import/Export elements** | ❌ | ✅ | ✅ |
-| **Manage element categories** | ❌ | ❌ | ✅ |
-| **Create PO (draft)** | ✅ | ✅ | ✅ |
-| **Submit PO for approval** | ✅ | ✅ | ✅ |
-| **Edit PO (draft)** | ✅ | ✅ | ✅ |
-| **Edit PO (pending_approval)** | ❌ | ❌ | ✅ |
-| **Approve PO** | ❌ | ❌ | ✅ |
-| **Reject PO** | ❌ | ❌ | ✅ |
-| **Delete PO** | ❌ | ❌ | ✅ |
-| **Download PO PDF** | ✅ | ✅ | ✅ |
-| **Submit goods receipt** | ✅ | ✅ | ✅ |
-| **Submit DPR** | ✅ | ✅ | ❌* |
-| **View DPRs** | Own only | All | All |
-| **Delete DPR** | ❌ | ❌ | ✅ |
-| **Log snag** | ✅ | ✅ | ❌* |
-| **View snags** | Own only | All | All |
-| **Review/resolve snag** | ❌ | ✅ | ✅ |
-| **Delete snag** | ❌ | ❌ | ✅ |
-| **Manage checklist templates** | ❌ | ❌ | ✅ |
-| **Assign checklist to project** | ❌ | ✅ | ✅ |
-| **Complete checklist items** | ✅ | ✅ | ✅ |
-| **Manage invoices** | ✅ (create) | ✅ (create) | ✅ (full) |
-| **Approve/pay invoices** | ❌ | ❌ | ✅ |
-| **Manage users** | ❌ | ✅ (create/edit) | ✅ (full) |
-| **Delete users** | ❌ | ❌ | ✅ |
-| **Toggle user active** | ❌ | ❌ | ✅ |
-| **Import users** | ❌ | ✅ | ✅ |
-| **Trigger overdue check** | ❌ | ❌ | ✅ |
-
-> *Admins can view DPRs and snags but are blocked from submitting them (by design — separation of oversight and reporting roles).
-
----
-
-## 14. File Storage Architecture
-
-All uploaded files are stored on the local filesystem inside the `server/uploads/` directory, which is bind-mounted as a Docker volume (`./server/uploads:/app/uploads`), ensuring data persistence across container restarts.
-
+Route tree:
 ```
-server/uploads/
-├── dpr-images/      ← Site progress photos (JPEG/PNG/WEBP, max 20MB)
-├── dpr-voice/       ← Voice note recordings (MP3/WAV/OGG/WebM/AAC/3GPP, max 20MB)
-├── po-pdfs/         ← Auto-generated PO PDFs (named: PO-YY-YY-NNNNN.pdf)
-├── po-items/        ← Line item reference images (JPEG/PNG/WEBP, max 2MB, max 5 per item)
-├── snag-images/     ← Snag issue photos (JPEG/PNG/WEBP/GIF, max 20MB, max 10 per snag)
-├── snag-files/      ← Snag documents (PDF/Word/Excel, max 20MB, max 5 per snag)
-└── invoices/        ← Vendor invoice files (any MIME accepted by Multer, max 30MB, max 20 per invoice)
+/login                    → LoginPage (public)
+/                         → ProtectedRoute → AppLayout
+  /dashboard              → DashboardPage
+  /projects               → ProjectsPage
+  /projects/new           → ProjectFormPage
+  /projects/:id           → ProjectDetailPage
+  /projects/:id/edit      → ProjectFormPage
+  /purchase-orders        → POListPage
+  /purchase-orders/new    → POFormPage
+  /purchase-orders/:id    → PODetailPage
+  /purchase-orders/:id/edit → POFormPage
+  /vendors                → VendorsPage
+  /vendors/new            → VendorFormPage
+  /vendors/:id/edit       → VendorFormPage
+  /elements               → ElementsPage
+  /categories             → CategoriesPage
+  /dpr                    → DPRListPage
+  /dpr/new                → DPRFormPage
+  /dpr/:id                → DPRDetailPage
+  /invoices               → InvoicesPage
+  /project-tracker        → ProjectTrackerPage
+  /checklist              → ChecklistPage
+  /snaglist               → SnaglistPage
+  /users                  → UsersPage
+  /notifications          → NotificationsPage
+  /profile                → ProfilePage
+  *                       → Navigate to /dashboard
 ```
 
-**File naming**: All uploaded files are renamed to `UUID + original_extension` using `uuid.v4()`. This prevents collisions and avoids exposing original filenames in storage.
+### 10.6 App Layout (`client/src/components/layout/AppLayout.jsx`)
 
-**URL scheme**: Files are served statically at `http://server:5000/uploads/<subdir>/<uuid.ext>` via `express.static`. Nginx proxies `/uploads` requests to the backend container. Stored paths in DB are relative (e.g., `/uploads/dpr-images/abc.jpg`).
+Renders the persistent shell around all authenticated pages:
+- **Sidebar** (fixed left, mobile: drawer): Navigation links filtered by `user.role`, user name/role display, Profile + Logout buttons
+- **Topbar** (sticky top): Hamburger menu (mobile), Bell icon with unread count badge (polls every 60s via `GET /api/notifications/unread-count`)
+- **Main content area**: `<Outlet />` renders the active page component
 
----
+**Nav item visibility by role:**
+- admin: all items
+- manager: all except Categories
+- employee: Dashboard, Projects, POs, Vendors, DPR, Project Tracker, Snag List, Invoices
 
-## 15. Frontend Architecture
+### 10.7 Shared Components (`client/src/components/shared/index.jsx`)
 
-### State Management Strategy
+Reusable primitives used throughout:
+- `Button` — variant: default/outline/ghost, size: sm/md/lg
+- `Input` — controlled input with Tailwind styling
+- `Select` — styled select dropdown
+- `Textarea` — styled textarea
+- `Label` — form label
+- `Badge` — status/tag pill
+- `Modal` — full-screen overlay with close button, title, scrollable body
+- `Spinner` — loading spinner
 
-| Data Type | Mechanism | Rationale |
-|---|---|---|
-| Authentication state | Zustand (`authStore`) | Needs to persist across navigation; minimal boilerplate |
-| Invoice list | Zustand (`invoiceStore`) | Frequent CRUD operations benefit from local cache |
-| Server data (projects, POs, vendors, etc.) | TanStack React Query | Automatic caching, refetch, and invalidation |
-| Form state | React Hook Form | Uncontrolled forms with built-in validation |
-| Local UI state | React `useState` | Modal open/close, tab selection, etc. |
+### 10.8 Pages Reference
 
-### Routing Architecture
+**DashboardPage** — Summary cards (total projects, active POs, open snags, pending receipts). Quick links. Uses `React Query` to fetch from `/api/projects`, `/api/purchase-orders`, `/api/snaglist`.
 
-React Router v6 nested routes:
-- All authenticated routes nested under `<ProtectedRoute>` (auth check)
-- All app pages nested under `<AppLayout>` (sidebar + topbar shell)
-- `ProtectedRoute` reads `authChecked` to avoid redirect flash on cookie-based session restore
-- App-level `useEffect` calls `fetchMe()` on mount — restores session from httpOnly cookie
+**ProjectsPage** — List of all projects with search, status filter, bulk import modal. Admin/manager: "New Project" button. Uses `GET /api/projects`.
 
-### API Communication Pattern
+**ProjectDetailPage** — Tabbed view:
+- **Overview**: client info, location, dates, remarks, project scope. Team members card with avatar initials + role badge.
+- **Stages**: `StagesTab` component — phase groups, stage rows, progress bar, drive links, status pills
+- **Purchase Orders**: linked POs for this project
+- **DPR**: last 10 DPRs
+- **Snags**: open/resolved snags
+- **Team**: team members management (add/remove, admin/manager only)
 
-All API calls go through the shared Axios instance in `lib/api.js`:
-- `baseURL` set to `VITE_API_URL` (build-time env var) or `/api` (relative — proxied by Nginx)
-- `withCredentials: true` ensures JWT cookie is sent on every request
-- Global 401 interceptor auto-redirects to `/login` for session expiry
+**StagesTab** — The stage engine UI. Groups stages by phase (master order). Each phase has: collapse/expand, phase progress bar, "All Done" button (admin/manager only). Each stage row: circle checkbox, stage name, status pills (any user), drive link (any user), edit/delete (admin/manager only).
 
-### Build & Serving
+**ProjectTrackerPage** — Kanban board (7 columns: Furniture Layout → Execution → Handover) + Table view toggle. Filters: status, project_type, location, services_taken, team_member. HTML5 drag/drop between columns. Backward drag shows confirmation modal. Data from `GET /api/projects/tracker`.
 
-- **Development**: `vite dev` — HMR on localhost:3000, proxy `/api` → `localhost:5000`
-- **Production**: `vite build` → static assets → Nginx serves from `/usr/share/nginx/html`; Nginx proxies `/api` and `/uploads` to the backend container
+**PODetailPage** — PO detail: line items table, challan image, approval history. Actions vary by role:
+- Any user: submit, download PDF, submit goods receipt
+- Admin: approve, reject, verify receipt
 
----
+**VendorFormPage** — Create/edit vendor with all fields including bank details, GST, PAN.
 
-## 16. Background Jobs & Automation
+**ChecklistPage** — Admin creates templates. Any authenticated user marks items complete. Assign template to project (admin/manager).
 
-| Job | Mechanism | Frequency | Purpose |
-|---|---|---|---|
-| Overdue Receipt Check | `setInterval` (Node.js) | Every 1 hour + on startup (30s delay) | Notify creators and admins of approved POs with no goods receipt submitted after 8 calendar days |
-| PO PDF Generation | Triggered on approval | Per-event | Generate 2-page A4 PDF via Puppeteer |
-| PO Email Dispatch | Triggered on approval | Per-event (async) | Send PO PDF to vendor via Gmail SMTP |
+**SnaglistPage** — Any user creates snags with images/files. Admin/manager updates status/vendor/dates. Admin deletes.
 
-No external job scheduler (cron daemon, Bull, Agenda) is used. The overdue checker runs in-process via `setInterval`.
+**InvoicesPage** — Any user creates invoices with file attachments. Admin updates status.
 
----
+**NotificationsPage** — List of notifications for current user. Mark individual or all as read. Links to related PO.
 
-## 17. Known Design Decisions & Patterns
+**ProfilePage** — View own profile (name, email, role). Self-service password change.
 
-| Decision | Implementation | Rationale |
-|---|---|---|
-| **Modular monolith** | `modules/<domain>/` folders | Keeps related code together without microservice complexity; single deployable unit |
-| **Raw SQL over ORM** | `pg` pool with parameterised queries | Full control over queries; avoids ORM abstraction overhead; team familiarity |
-| **httpOnly cookie auth** | `res.cookie('token', ...)` | Prevents XSS token theft vs. localStorage; `withCredentials` on Axios for CORS |
-| **Dual token source** | Cookie + Bearer header fallback | Supports both browser (cookie) and API tool (header) usage |
-| **UUID primary keys** | `gen_random_uuid()` | No sequential ID leakage; safe for distributed use |
-| **COALESCE-based updates** | `SET field = COALESCE($1, field)` | Partial updates without requiring all fields; avoids separate PATCH/PUT logic |
-| **Static route ordering** | e.g., `/template/download` before `/:id` | Prevents route shadowing in Express — static paths must precede parameterised ones |
-| **ON CONFLICT DO NOTHING** | Bulk imports | Idempotent seeding; re-running won't duplicate data |
-| **Referential integrity in controllers** | Count-check before DELETE | Protects data relationships without relying solely on FK constraints |
-| **Async email, sync PDF** | `sendPOEmail().then(...)` in approve | PDF must complete before responding; email failure is non-fatal and shouldn't block approval |
-| **Role scoping in list queries** | `WHERE submitted_by = req.user.id` for employees | Data isolation for employees without changing API surface area |
-| **Vendor category cross-mapping** | Hardcoded `ELEMENT_TO_VENDOR_CATEGORIES` | Enables smart dependent dropdowns in PO form — selecting an element category filters compatible vendors |
-| **One-time password change** | `password_changed_by_user` flag | Users can change their initial password once; subsequent resets must go through admin |
-| **Notification deduplication** | 24-hour window check before INSERT | Prevents notification spam from hourly overdue checker |
+**UsersPage** — Admin/manager: view, create, edit, deactivate/activate, bulk import users. Admin only: delete, toggle active.
 
 ---
 
-*Document generated by automated architectural audit — Xclusive Interiors PO & Project Management System — April 2026*
+## 11. Database Schema — All Tables
+
+Tables created in `001_init.sql`, extended in patches `003` through `010`, and runtime-patched by `autoMigrate.js`.
+
+### `users`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | gen_random_uuid() |
+| name | VARCHAR(100) | NOT NULL |
+| email | VARCHAR(150) | UNIQUE NOT NULL |
+| password_hash | TEXT | bcryptjs hash |
+| role | VARCHAR(20) | CHECK: admin/manager/employee |
+| is_active | BOOLEAN | DEFAULT true |
+| created_at | TIMESTAMPTZ | DEFAULT NOW() |
+
+### `vendors`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| name | VARCHAR(150) | NOT NULL |
+| contact_person, phone, email, address, category | various | Optional |
+| gstin, pan | VARCHAR | Tax IDs |
+| bank_account_holder, bank_account_number, bank_ifsc, bank_name | various | Bank details |
+| is_active | BOOLEAN | DEFAULT true |
+| created_by | UUID → users.id | |
+| created_at | TIMESTAMPTZ | |
+
+### `categories`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| name | VARCHAR(100) | UNIQUE NOT NULL |
+| is_active | BOOLEAN | |
+| created_by | UUID → users.id | |
+| created_at | TIMESTAMPTZ | |
+
+### `elements`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| name | VARCHAR(200) | NOT NULL |
+| description | TEXT | |
+| category_id | UUID → categories.id | |
+| default_unit | VARCHAR(50) | e.g., sqft, nos, rft |
+| gst_percent | NUMERIC(5,2) | DEFAULT 0 |
+| brand_make | VARCHAR(150) | |
+| is_active | BOOLEAN | |
+| created_by | UUID → users.id | |
+| created_at | TIMESTAMPTZ | |
+
+### `projects`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| name | VARCHAR(200) | NOT NULL |
+| code | VARCHAR(50) | UNIQUE NOT NULL |
+| client_name | VARCHAR(150) | |
+| site_address | TEXT | |
+| location | VARCHAR(150) | |
+| status | VARCHAR(20) | CHECK: active/completed/template |
+| project_type | VARCHAR(30) | CHECK: 2BHK/3BHK/.../Commercial |
+| services_taken | VARCHAR(50) | CHECK: Turnkey/Project M./Design Consultancy/PM |
+| team_lead_3d, team_lead_2d | VARCHAR(100) | Name strings (not FK) |
+| remarks, project_scope | TEXT | |
+| start_date, end_date | DATE | |
+| created_by | UUID → users.id | |
+| created_at | TIMESTAMPTZ | |
+
+### `project_team`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| project_id | UUID → projects.id | ON DELETE CASCADE |
+| user_id | UUID → users.id | ON DELETE CASCADE |
+| UNIQUE(project_id, user_id) | | |
+
+### `project_contractors`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| project_id | UUID → projects.id | |
+| trade | VARCHAR(100) | ON CONFLICT updates |
+| contractor_name | VARCHAR(150) | |
+| vendor_id | UUID → vendors.id | Optional |
+| notes | TEXT | |
+| UNIQUE(project_id, trade) | | |
+
+### `project_activity_schedule` (Stage Engine)
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| project_id | UUID → projects.id | |
+| template_id | UUID → activity_schedule_templates.id | Optional |
+| activity_no | VARCHAR(20) | From template |
+| milestone_name | VARCHAR(300) | Stage title |
+| phase | VARCHAR(100) | e.g., "3D Design", "Execution" |
+| phase_group | VARCHAR(100) | Alias for phase (same field) |
+| step_number | INT | |
+| duration_days | INT | Planned duration |
+| dependency_condition | TEXT | From template |
+| sort_order | INT | Display order |
+| status | VARCHAR(20) | CHECK: pending/in_progress/completed/delayed/blocked |
+| weight | NUMERIC(5,2) | DEFAULT 1 (for weighted progress) |
+| planned_start_date | DATE | |
+| planned_end_date | DATE | |
+| actual_start_date | DATE | |
+| actual_end_date | DATE | |
+| assigned_to | UUID → users.id | Assigned team member |
+| notes | TEXT | |
+| attachment_url | TEXT | File attachment URL |
+| drive_link | TEXT | Google Drive folder URL |
+| completed_by | UUID → users.id | Auto-set when status → completed |
+| created_by | UUID → users.id | |
+| updated_by | UUID → users.id | Auto-set on every PUT |
+| created_at | TIMESTAMPTZ | |
+| updated_at | TIMESTAMPTZ | Updated on every PUT |
+
+### `stage_templates`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| name | VARCHAR(200) | NOT NULL |
+| description | TEXT | |
+| project_type | VARCHAR(50) | |
+| created_by | UUID → users.id | |
+| created_at | TIMESTAMPTZ | |
+
+### `stage_template_items`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| template_id | UUID → stage_templates.id | ON DELETE CASCADE |
+| title | VARCHAR(300) | NOT NULL |
+| phase_group | VARCHAR(100) | |
+| sort_order | INT | |
+| weight | NUMERIC(5,2) | DEFAULT 1 |
+| duration_days | INT | DEFAULT 0 |
+
+### `audit_logs`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| user_id | UUID → users.id | |
+| user_name | VARCHAR(100) | Denormalized for speed |
+| action | VARCHAR(100) | e.g., STAGE_UPDATED, TEAM_UPDATED |
+| entity_type | VARCHAR(50) | e.g., 'stage', 'project' |
+| entity_id | UUID | ID of affected entity |
+| old_data | JSONB | Snapshot before change |
+| new_data | JSONB | Snapshot after change |
+| notes | TEXT | |
+| created_at | TIMESTAMPTZ | Indexed DESC |
+
+### `purchase_orders`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| po_number | VARCHAR | Unique, auto-generated |
+| project_id | UUID → projects.id | |
+| vendor_id | UUID → vendors.id | |
+| status | VARCHAR | draft/submitted/approved/rejected |
+| total | NUMERIC | Auto-calculated from line items |
+| notes | TEXT | |
+| created_by | UUID → users.id | |
+| approved_by | UUID → users.id | |
+| approved_at | TIMESTAMPTZ | |
+| rejection_reason | TEXT | |
+| receipt_submitted | BOOLEAN | DEFAULT false |
+| receipt_at | TIMESTAMPTZ | |
+| receipt_challan_url | TEXT | Uploaded challan image path |
+| receipt_verified | BOOLEAN | DEFAULT false |
+| receipt_verified_at | TIMESTAMPTZ | |
+| receipt_verified_by | UUID → users.id | |
+| created_at, updated_at | TIMESTAMPTZ | |
+
+### `po_line_items`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| po_id | UUID → purchase_orders.id | ON DELETE CASCADE |
+| element_id | UUID → elements.id | |
+| description | TEXT | |
+| qty | NUMERIC | |
+| unit | VARCHAR | |
+| unit_price | NUMERIC | |
+| gst_percent | NUMERIC | |
+| total | NUMERIC | Calculated: qty * unit_price * (1 + gst/100) |
+
+### `po_line_item_images`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| line_item_id | UUID → po_line_items.id | ON DELETE CASCADE |
+| file_url | TEXT | Path to uploaded image |
+| uploaded_at | TIMESTAMPTZ | |
+
+### `dprs`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| project_id | UUID → projects.id | |
+| submitted_by | UUID → users.id | |
+| report_date | DATE | |
+| work_description | TEXT | |
+| progress_summary, work_completed, issues_faced, material_used | TEXT | |
+| status | VARCHAR | submitted/reviewed |
+| created_at | TIMESTAMPTZ | |
+
+### `dpr_images`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| dpr_id | UUID → dprs.id | ON DELETE CASCADE |
+| file_url | TEXT | Path |
+| file_name | VARCHAR | Original filename |
+
+### `dpr_voice_notes`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| dpr_id | UUID → dprs.id | ON DELETE CASCADE |
+| file_url | TEXT | |
+| file_name | VARCHAR | |
+
+### `snags`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| project_id | UUID → projects.id | |
+| reported_by | UUID → users.id | |
+| area, item_name | VARCHAR | Location and item description |
+| description, designer_name | TEXT/VARCHAR | |
+| status | VARCHAR | open/in_progress/resolved |
+| admin_note | TEXT | Admin response |
+| vendor_id | UUID → vendors.id | Assigned vendor |
+| date_of_confirmation, date_of_material_supply | DATE | |
+| resolved_by | UUID → users.id | |
+| resolved_at | TIMESTAMPTZ | |
+| created_at | TIMESTAMPTZ | |
+
+### `snag_images`, `snag_files`
+Linked to `snags.id` ON DELETE CASCADE. Store `file_url`, `file_name` (and for files: `file_type`, `file_size`).
+
+### `checklist_templates`, `checklist_template_items`
+Template definition. Items have `task_name`, `sort_order`.
+
+### `project_checklists`, `project_checklist_items`
+Instance of a template assigned to a project. Items track `is_completed`, `completed_by`, `completed_at`.
+
+### `invoices`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| project_id | UUID → projects.id | Optional |
+| vendor_id | UUID → vendors.id | Optional |
+| invoice_number | VARCHAR | |
+| invoice_date | DATE | |
+| amount | NUMERIC | |
+| status | VARCHAR | pending/paid/overdue |
+| notes | TEXT | |
+| created_by | UUID → users.id | |
+| created_at | TIMESTAMPTZ | |
+
+### `invoice_files`
+Linked to `invoices.id`. Stores uploaded PDF/image paths.
+
+### `notifications`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| user_id | UUID → users.id | Recipient |
+| type | VARCHAR | receipt_overdue / receipt_reminder |
+| title | TEXT | Short notification title |
+| body | TEXT | Full message |
+| po_id | UUID → purchase_orders.id | Optional link |
+| is_read | BOOLEAN | DEFAULT false |
+| created_at | TIMESTAMPTZ | |
+
+### `activity_schedule_templates`
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | |
+| project_type | VARCHAR | e.g., '3BHK', '4BHK_Bungalow' |
+| activity_no | VARCHAR | e.g., '1.1', '2.3' |
+| milestone_name | VARCHAR | Stage title |
+| phase | VARCHAR | Furniture Layout / Estimation / 3D Design / 2D Drawings / Execution - Civil / Execution |
+| step_number | INT | Sequence within project type |
+| duration_days | INT | Standard duration |
+| dependency_condition | TEXT | Description of dependencies |
+| is_active | BOOLEAN | DEFAULT true |
+| created_at | TIMESTAMPTZ | |
+
+Seeded with 45 records across 15 project types from the ABJ Combined Activity Schedule Excel.
+
+---
+
+## 12. Complete API Endpoint Reference
+
+### Summary Table
+
+| Module | Base Path | Total Endpoints | Open to All Auth | Admin/Manager Only | Admin Only |
+|--------|-----------|-----------------|------------------|-------------------|------------|
+| Auth | `/api/auth` | 3 | 1 (login, logout) | — | — |
+| Users | `/api/users` | 10 | 2 (me, change-pw) | 6 | 2 |
+| Projects | `/api/projects` | 22 | 8 | 11 | 3 |
+| POs | `/api/purchase-orders` | 12 | 8 | — | 4 |
+| Vendors | `/api/vendors` | 7 | 2 | 3 | 1 |
+| Categories | `/api/categories` | 4 | 1 | — | 3 |
+| Elements | `/api/elements` | 7 | 2 | 3 | 1 |
+| DPR | `/api/dpr` | 4 | 3 | — | 1 |
+| Checklist | `/api/checklist` | 6 | 4 | 2 | 1 |
+| Snaglist | `/api/snaglist` | 5 | 3 | 1 | 1 |
+| Invoices | `/api/invoices` | 6 | 3 | — | 2 |
+| Notifications | `/api/notifications` | 5 | 4 | — | 1 |
+| Activity Schedule | `/api/activity-schedule` | 2 | 2 | — | — |
+| Health | `/api/health` | 1 | 1 | — | — |
+
+**Total: ~94 API endpoints.**
+
+---
+
+## 13. Authentication & Authorization Flow
+
+### Login (Cookie-based)
+
+```
+Browser → POST /api/auth/login { email, password }
+        → auth.controller.login
+        → bcrypt.compare password
+        → jwt.sign({ id, role, name, email }, JWT_SECRET, { expiresIn: '7d' })
+        → res.cookie('token', jwt, { httpOnly: true, sameSite: 'lax', secure: prod+https })
+        → 200 { success: true, user: { id, name, email, role } }
+Browser stores cookie (httpOnly, not accessible to JS)
+```
+
+### Every Authenticated Request
+
+```
+Browser → GET/POST /api/... (Cookie header: token=<jwt>)
+        → authenticate middleware
+        → jwt.verify(token, JWT_SECRET)
+        → req.user = { id, role, name, email }
+        → [if authorize() present]: check req.user.role in allowed list
+        → route handler
+```
+
+### Session Expiry
+
+When any API call returns 401, the Axios interceptor in `api.js` redirects to `/login`. On app mount, `App.jsx` calls `fetchMe()` which hits `GET /api/auth/me` — if expired/invalid cookie, returns 401, Zustand clears user, ProtectedRoute redirects to login.
+
+### Role Hierarchy
+
+```
+admin    → access everything
+manager  → most write operations, cannot delete, cannot manage users (except create/edit)
+employee → read-only on most resources, can create DPRs/snags/POs, mark stages/checklists, add drive links
+```
+
+**Specific employee permissions:**
+- Can CREATE: POs (draft), DPRs, Snags, Invoices
+- Can UPDATE: Stage status/notes/drive_link (any stage), Checklist items
+- Can READ: Everything except audit logs, user management
+- Cannot CREATE/DELETE: Projects, Vendors, Elements, Templates
+- Cannot APPROVE/REJECT: POs
+
+---
+
+## 14. Key Business Flows
+
+### 14.1 Purchase Order Lifecycle
+
+```
+1. Employee/Manager creates PO (POST /api/purchase-orders)
+   → status: 'draft', assigned to project + vendor, line items added
+
+2. Creator submits PO (POST /api/purchase-orders/:id/submit)
+   → status: 'submitted'
+
+3. Admin approves (POST /api/purchase-orders/:id/approve)
+   → status: 'approved', approved_by/at set
+   → email sent to creator via nodemailer
+
+   OR Admin rejects (POST /api/purchase-orders/:id/reject { reason })
+   → status: 'rejected', rejection_reason set
+   → email sent to creator
+
+4. Any user submits goods receipt (POST /api/purchase-orders/:id/receipt)
+   → receipt_submitted = true, challan image uploaded
+   → Overdue checker timer resets for this PO
+
+5. Admin verifies receipt (POST /api/purchase-orders/:id/verify-receipt)
+   → receipt_verified = true, receipt_verified_at/by set
+
+6. Overdue notifications (automatic via overdueChecker.js):
+   → Day 6 after approval: reminder notification to creator
+   → Day 8+ after approval: overdue alert to creator + all admins
+```
+
+### 14.2 Project Stage Lifecycle
+
+```
+1. Admin/Manager creates project (POST /api/projects)
+2. Admin/Manager applies template or adds stages manually
+   (POST /api/projects/:id/stages/apply-template OR POST /api/projects/:id/stages)
+3. Team members assigned (PUT /api/projects/:id/team/bulk)
+4. Anyone marks stages in_progress / completed via status pills or circle checkbox
+   (PUT /api/projects/:id/stages/:sid { status: 'completed' })
+5. Anyone adds Google Drive folder link to a stage
+   (PUT /api/projects/:id/stages/:sid { drive_link: 'https://drive.google.com/...' })
+6. Admin/Manager edits stage details, adds/removes stages
+7. Progress auto-calculated on every GET /api/projects/:id/stages
+8. Admin/Manager drags Kanban card → advance-column API bulk-completes/resets phases
+9. On all stages completed: project moves to 'Completed' column
+```
+
+### 14.3 Daily Progress Report Flow
+
+```
+1. Any user visits /dpr/new
+2. Selects project, date, fills work description + optional images + voice notes
+3. POST /api/dpr (multipart/form-data with images[] and voice[] fields)
+4. Server: saves DPR record, uploads files to uploads/dpr-images/ and uploads/dpr-voice/
+5. DPR viewable by creator (employee) or all users (admin/manager)
+```
+
+### 14.4 Notification Flow
+
+```
+overdueChecker.js (runs every N hours):
+  → Queries POs: approved + receipt_submitted=false + approved_at < NOW()-8days
+  → For each overdue PO:
+      → Finds all admin users + PO creator
+      → Checks: no notification in last 24h for this PO+user
+      → Inserts notification row (type='receipt_overdue')
+  → Same logic for 6-day reminder (creator only, type='receipt_reminder')
+
+Frontend (every 60s):
+  → GET /api/notifications/unread-count → updates Bell badge
+  → User clicks Bell → /notifications page
+  → GET /api/notifications → list
+  → PATCH /api/notifications/:id/read OR /read-all
+```
+
+---
+
+## 15. Frontend ↔ Backend Connection Map
+
+### How Vite Proxy Works (Development)
+
+`vite.config.js` has:
+```javascript
+proxy: { '/api': { target: 'http://localhost:5000', changeOrigin: true } }
+```
+So in dev, `api.get('/projects')` → `api.get('/api/projects')` → Vite proxies to `http://localhost:5000/api/projects`.
+
+### How Nginx Routes Work (Production Docker)
+
+The React app is served by Nginx on port 80 (mapped to 3000). Nginx config in the client Dockerfile has:
+```nginx
+location /api {
+  proxy_pass http://server:5000;
+}
+location / {
+  try_files $uri /index.html;
+}
+```
+React Router handles client-side routing (SPA). All `/api` requests go to the Express server.
+
+### React Query Key Conventions
+
+| Query Key | Endpoint | Component |
+|-----------|----------|-----------|
+| `['stages', projectId]` | `GET /api/projects/:id/stages` | StagesTab |
+| `['stage-templates']` | `GET /api/projects/stage-templates` | ApplyTemplateModal |
+| `['notif-count']` | `GET /api/notifications/unread-count` | AppLayout |
+| `['projects']` | `GET /api/projects` | ProjectsPage |
+| `['project', id]` | `GET /api/projects/:id` | ProjectDetailPage |
+| `['tracker']` | `GET /api/projects/tracker` | ProjectTrackerPage |
+
+Cache invalidation via `queryClient.invalidateQueries(['stages', projectId])` after mutations.
+
+---
+
+## 16. Security Model & Threat Analysis
+
+### Authentication Security
+- JWT in httpOnly cookie → not accessible to JavaScript (XSS-resistant)
+- `sameSite: 'lax'` → CSRF protection for cross-origin form submissions
+- `secure: true` only in production + HTTPS → prevents cookie interception
+- bcryptjs password hashing (not plain text or MD5)
+- Token expiry: 7 days; no refresh token (re-login required after expiry)
+
+### Authorization Security
+- Role middleware is enforced at the route level, not just client-side
+- Employees cannot access admin/manager routes even if they manipulate the UI
+- Each user's notifications/DPRs are filtered by their user_id
+
+### Known Security Issues (VPS Context)
+
+1. **Unauthenticated static file access:** `app.use('/uploads', express.static(...))` serves uploaded files (DPR images, challan scans, voice notes, invoice PDFs) without checking authentication. Any person who knows or guesses a file URL can access it. On a VPS with 25 trusted internal users this is low risk, but on a public-facing URL it could expose sensitive documents.
+   **Fix:** Add `authenticate` middleware before the static serve, or move to signed URLs.
+
+2. **Double rate limiter on `/api/auth`:** In `index.js`, `app.use('/api/auth', rateLimiter)` and `app.use('/api', rateLimiter)` both apply to auth routes. The effective limit is halved for auth endpoints (50 successful requests instead of 100 per 15 min per IP).
+   **Fix:** Remove the `/api/auth` specific rate limiter line; the `/api` limiter already covers it.
+
+3. **SQL injection in `generateSchedule`:** The `generateSchedule` controller (legacy endpoint) builds a raw SQL VALUES string via template literals without parameterizing `activity_no`, `phase`, `dependency_condition` fields from the templates table. While templates are internal data (not user-direct input), this is bad practice.
+   **Fix:** Use individual parameterized INSERT statements in a loop, similar to how `applyTemplate` does it.
+
+4. **Error messages in production:** The global error handler returns `err.message` directly. Internal errors (DB errors, etc.) could expose schema details to clients. Consider filtering in production: return a generic message for 500 errors.
+
+5. **multer temp files not cleaned up:** `multer({ dest: '/tmp/' })` used for import routes leaves files in `/tmp/` after processing. On a long-running server, this accumulates. Add `fs.unlinkSync(req.file.path)` after processing each import.
+
+6. **No input length limits on freetext fields:** Fields like `notes`, `description`, `work_description` have no server-side max length check beyond the DB column type (TEXT = unlimited). Large payloads could affect performance.
+
+7. **CORS allows no-origin requests:** `if (!origin) return cb(null, true)` — server-to-server requests (curl, Postman, server-side scripts) bypass CORS. On a VPS this is fine but means CORS is only a browser protection.
+
+### Production Hardening Recommendations
+- Set up Let's Encrypt HTTPS on the VPS domain
+- Set `CLIENT_URL` to the exact production HTTPS URL
+- Set `NODE_ENV=production` in docker-compose (already done)
+- Consider adding the `/uploads` auth check for sensitive file types
+- Review rate limiter threshold: 100/15min may be too restrictive for 25 users sharing an office IP during peak hours (consider raising to 500/15min or per-user limits after auth)
+
+---
+
+## 17. Diagnosis: Issues, Loose Ends & Recommendations
+
+### CONFIRMED ISSUES
+
+#### Issue 1: Double Rate Limiter (Low Severity)
+**File:** `server/index.js` lines 26-27
+**Problem:** `/api/auth` gets rate limited twice per request (matched by both `/api/auth` and `/api` limiters). Effective limit for auth routes is 50 req/15min instead of 100.
+**Fix:** Remove line 26 (`app.use('/api/auth', rateLimiter)`).
+
+#### Issue 2: SQL Injection in generateSchedule (Medium Severity)
+**File:** `server/modules/projects/projects.controller.js` lines 116-122
+**Problem:** Template strings are used to build SQL VALUES without parameterization for `activity_no`, `phase`, `dependency_condition`, `step_number`, `duration_days` fields.
+```javascript
+// CURRENT — vulnerable pattern:
+const values = templates.map((t, i) =>
+  `('${req.params.id}','${t.id}','${t.activity_no}','${t.milestone_name.replace(/'/g,"''")}','${t.phase}',...)`
+).join(',');
+```
+**Risk:** Data in `activity_schedule_templates` could be manipulated to inject SQL. Source is internal DB (low direct risk), but violates defense-in-depth.
+**Fix:** Use individual `INSERT` with parameterized `$1, $2...` in a loop (already the pattern in `applyTemplate`).
+
+#### Issue 3: Unauthenticated File Serving (Medium Severity for Public URLs)
+**File:** `server/index.js` line 33
+**Problem:** `app.use('/uploads', express.static(...))` serves ALL uploaded files without JWT check. Challan images, DPR photos, voice notes, invoice PDFs, line item images are publicly accessible via direct URL.
+**Risk:** Low for internal VPS, Medium if publicly accessible domain is used.
+**Fix for higher security:** Remove static serve line, add an authenticated route: `router.get('/uploads/*', authenticate, (req, res) => { res.sendFile(path.join(uploadsDir, req.params[0])) })`
+
+#### Issue 4: multer Temp Files Not Cleaned (Low Severity)
+**Files:** `projects.routes.js`, `users.routes.js`, `vendors.routes.js` — all use `multer({ dest: '/tmp/' })` for imports
+**Problem:** After processing, temp files remain in `/tmp/`.
+**Fix:** Add `require('fs').unlinkSync(req.file.path)` at the end of each import handler. Or use `multer.memoryStorage()` for small import files.
+
+#### Issue 5: drive_link Not in 010_project_stages.sql (Cosmetic)
+**File:** `server/db/migrations/010_project_stages.sql`
+**Problem:** The `drive_link` column is managed by `autoMigrate.js` (runtime) but not in the numbered migration. If someone runs only the numbered SQL files against a fresh DB (bypassing Docker) and never starts the server, they'll miss the column.
+**Fix:** Add `ALTER TABLE project_activity_schedule ADD COLUMN IF NOT EXISTS drive_link TEXT;` to the migration file for completeness.
+
+### NON-ISSUES (verified working)
+- `GET /projects/tracker` static route before `/:id` — correct, Express matches specifics first ✅
+- `PATCH /notifications/read-all` route ordering — `/:id/read` requires two segments, no conflict ✅
+- `drive_link` column existence — added by `autoMigrate.js` on every server start ✅
+- `module.exports.checkOverdueReceipts` on notifications route — valid JS pattern ✅
+- `const checkOverdueReceipts` hoisting in route handler — used inside callback, resolved by load time ✅
+
+### EMPTY OR STUB ENDPOINTS
+None found. All registered routes have implemented controller functions. No routes return placeholder 501/200 empty responses.
+
+### LOOSE ENDS
+- `PROJECT_ANALYSIS.md` and `Project_Full_Documentation.pdf` were deleted from the working tree (visible in git status). They are documentation artifacts, not code — no impact on the app.
+- `backup_before_tracker.sql` is a PostgreSQL dump file from before the Project Tracker upgrade. It shows as an untracked file in git. It is safe to delete or commit to git for archiving.
+- `.claude/sessions/` files are auto-generated by Claude Code and not needed in git. Consider adding them to `.gitignore`.
+
+### PERFORMANCE NOTES (25 users, Hostinger VPS)
+- Connection pool `max: 20` — appropriate for 25 users
+- Rate limiter 100/15min — may be tight if 25 users are all on the same office IP. Consider raising to 300-500 for internal use
+- `getTrackerData` fetches all projects + all their stages in 2 queries — efficient with ANY($1::uuid[]) bulk query
+- No pagination on project list or DPR list — acceptable for current scale, add pagination if project count exceeds 500+
+- Notification bell polls every 60 seconds — fine for 25 users (25 req/min total)
+- Static file serving without a CDN is fine for the current scale
+
+---
+
+## About `backup_before_tracker.sql`
+
+This file is a **PostgreSQL database dump** created using `pg_dump` immediately before the Project Tracker upgrade was implemented (around 2026-04-20). It was dumped from PostgreSQL version 18.3.
+
+**Purpose:** Rollback safety net. If the Project Tracker upgrade (migration 010, autoMigrate changes, new frontend pages) caused data loss or corruption, you could restore the database to this pre-upgrade state by running this file against a fresh PostgreSQL instance.
+
+**Current state:** The dump appears to contain only the schema/structure without data rows (the content is minimal — just PostgreSQL headers and a `\restrict`/`\unrestrict` pair indicating an empty data dump). This suggests it was a schema-only dump or the database was newly initialized at the time of the dump.
+
+**What to do with it:** Keep it archived as a reference point. Once the Project Tracker feature is stable in production, it can be deleted or committed to a `backups/` directory in git.
+
+---
+
+## About `generate_pdf.py`
+
+This is a **Python documentation converter script** located at the project root. It reads `PROJECT_ANALYSIS.md` (this very file) and generates `Project_Full_Documentation.pdf` using the `reportlab` library.
+
+**What it does:**
+- Parses the markdown file line by line
+- Renders headings (H1-H4), paragraphs, bullet lists, ordered lists, code blocks, tables, blockquotes, horizontal rules
+- Generates a professional cover page with company branding (dark/navy color scheme, gold accent line)
+- Adds persistent header/footer on every page (company name, "CONFIDENTIAL", page number, date)
+- Outputs a print-ready A4 PDF with proper margins
+
+**Dependencies:** `reportlab` Python library. Install with `pip install reportlab`.
+
+**Usage:**
+```bash
+python generate_pdf.py
+# Reads: PROJECT_ANALYSIS.md
+# Writes: Project_Full_Documentation.pdf
+```
+
+**Note:** If `PROJECT_ANALYSIS.md` does not exist, the script will error. Always run from the project root directory where both files are expected to reside.

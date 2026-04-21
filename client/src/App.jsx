@@ -20,6 +20,7 @@ import DPRListPage          from './pages/dpr/DPRListPage'
 import DPRFormPage          from './pages/dpr/DPRFormPage'
 import DPRDetailPage        from './pages/dpr/DPRDetailPage'
 import ChecklistPage        from './pages/checklist/ChecklistPage'
+import ProjectTrackerPage   from './pages/project-tracker/ProjectTrackerPage'
 import InvoicesPage         from './pages/invoices/InvoicesPage'
 import SnaglistPage         from './pages/snaglist/SnaglistPage'
 import UsersPage            from './pages/users/UsersPage'
@@ -61,6 +62,7 @@ export default function App() {
           <Route path="/dpr/:id"     element={<DPRDetailPage />} />
 
           <Route path="/invoices"  element={<InvoicesPage />} />
+          <Route path="/project-tracker" element={<ProjectTrackerPage />} />
           <Route path="/checklist" element={<ChecklistPage />} />
           <Route path="/snaglist"  element={<SnaglistPage />} />
           <Route path="/users"     element={<UsersPage />} />
