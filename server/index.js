@@ -23,8 +23,7 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use('/api/auth', rateLimiter);   
-app.use('/api', rateLimiter);  
+app.use('/api/auth', rateLimiter);    
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
