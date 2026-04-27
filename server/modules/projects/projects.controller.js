@@ -210,21 +210,155 @@ const logAudit = async (client, { userId, userName, action, entityType, entityId
 };
 
 // ── Phase → Kanban column mapping (follows master phase order) ──
+// ── NEW Phase/Column mappings (replaces old ones at line 213) ──────────────
+
+// Phases from new universal sheet → Kanban column mapping
 const PHASE_TO_COLUMN = {
-  'Furniture Layout':  'Furniture Layout',
-  'Estimation':        'Estimation',
-  '3D Design':         '3D Design',
-  '2D Drawings':       '2D Drawings',
-  'Execution - Civil': 'Execution - Civil',
-  'Execution':         'Execution',
-  'Handover':          'Handover',
+  'FURNITURE LAYOUT':   'Furniture Layout',
+  'Furniture Layout':   'Furniture Layout',
+  '3D DESIGN':          '3D Design',
+  '3D Design':          '3D Design',
+  '2D DRAWINGS':        '2D Drawings',
+  '2D Drawings':        '2D Drawings',
+  'MASTER BEDROOM':     '2D Detailed Drawing',
+  "PARENT'S BEDROOM":   '2D Detailed Drawing',
+  "PARENT'S BEDROOM ":  '2D Detailed Drawing',
+  "KID'S BEDROOM":      '2D Detailed Drawing',
+  'GUEST BEDROOM':      '2D Detailed Drawing',
+  'OFFICE ROOM':        '2D Detailed Drawing',
+  "SERVANT'S ROOM":     '2D Detailed Drawing',
+  'SERVICES':           '2D Detailed Drawing',
+  '2D Detailed Drawing':'2D Detailed Drawing',
+  'SELECTION':          'Selection',
+  'Selection':          'Selection',
+  'CUSTOMIZATION':      'Customization',
+  'Customization':      'Customization',
+  'EXECUTION':          'Execution',
+  'Execution':          'Execution',
+  'Execution - Civil':  'Execution',
+  'Handover':           'Completed',
+  'HANDOVER':           'Completed',
 };
 
-// Master phase sequence — used to find the active (first-incomplete) phase
 const PHASE_SEQUENCE = [
-  'Furniture Layout', 'Estimation', '3D Design', '2D Drawings',
-  'Execution - Civil', 'Execution', 'Handover',
+  'Furniture Layout', 'FURNITURE LAYOUT',
+  '3D Design', '3D DESIGN',
+  '2D Drawings', '2D DRAWINGS',
+  '2D Detailed Drawing',
+  'MASTER BEDROOM', "PARENT'S BEDROOM", "PARENT'S BEDROOM ", "KID'S BEDROOM",
+  'GUEST BEDROOM', 'OFFICE ROOM', "SERVANT'S ROOM", 'SERVICES',
+  'Selection', 'SELECTION',
+  'Customization', 'CUSTOMIZATION',
+  'Execution', 'EXECUTION', 'Execution - Civil',
+  'Handover', 'HANDOVER',
 ];
+
+// Ordered Kanban columns
+const KANBAN_COLUMNS = [
+  'Not Started', 'Furniture Layout', '3D Design', '2D Drawings',
+  '2D Detailed Drawing', 'Selection', 'Customization', 'Execution', 'Completed',
+];
+
+// Map kanban column → phases it covers (for advance/backward drag)
+const COLUMN_TO_PHASES = {
+  'Not Started':         [],
+  'Furniture Layout':    ['Furniture Layout', 'FURNITURE LAYOUT'],
+  '3D Design':           ['3D Design', '3D DESIGN'],
+  '2D Drawings':         ['2D Drawings', '2D DRAWINGS'],
+  '2D Detailed Drawing': ['2D Detailed Drawing', 'MASTER BEDROOM', "PARENT'S BEDROOM", "PARENT'S BEDROOM ", "KID'S BEDROOM", 'GUEST BEDROOM', 'OFFICE ROOM', "SERVANT'S ROOM", 'SERVICES'],
+  'Selection':           ['Selection', 'SELECTION'],
+  'Customization':       ['Customization', 'CUSTOMIZATION'],
+  'Execution':           ['Execution', 'EXECUTION', 'Execution - Civil'],
+  'Completed':           [],
+};
+
+// ── Date scaling helpers ───────────────────────────────────────────────────
+/**
+ * Scale stage duration_days proportionally so total sums to targetDays.
+ * Decimals accumulate within phase and are rounded at phase boundary.
+ * @param {Array} stages - array of { phase_group, duration_days }
+ * @param {number} targetDays
+ * @returns {Array} stages with scaled duration_days (integers)
+ */
+const scaleStagesByTargetDays = (stages, targetDays) => {
+  const totalTemplateDays = stages.reduce((sum, s) => sum + (parseFloat(s.duration_days) || 0), 0);
+  if (!totalTemplateDays || !targetDays) return stages;
+  const factor = targetDays / totalTemplateDays;
+
+  // Group by phase to accumulate decimals and round at boundary
+  const phaseGroups = [];
+  const phaseMap = {};
+  for (const s of stages) {
+    const key = s.phase_group || s.phase || '__none__';
+    if (!phaseMap[key]) { phaseMap[key] = []; phaseGroups.push(key); }
+    phaseMap[key].push(s);
+  }
+
+  const result = [];
+  let globalAccumulator = 0;
+  let totalAssigned = 0;
+  const totalStages = stages.length;
+  let stageIdx = 0;
+
+  for (const phase of phaseGroups) {
+    const phaseStages = phaseMap[phase];
+    let phaseAccumulator = 0;
+    for (let i = 0; i < phaseStages.length; i++) {
+      stageIdx++;
+      const rawDays = (parseFloat(phaseStages[i].duration_days) || 0) * factor;
+      phaseAccumulator += rawDays;
+      const isLastInPhase = i === phaseStages.length - 1;
+      const isGlobalLast = stageIdx === totalStages;
+      let assignedDays;
+      if (isGlobalLast) {
+        // Last stage globally: assign whatever is left to hit target exactly
+        assignedDays = Math.max(0, Math.round(targetDays - totalAssigned));
+      } else if (isLastInPhase) {
+        assignedDays = Math.max(0, Math.round(phaseAccumulator));
+        phaseAccumulator = 0;
+      } else {
+        assignedDays = Math.max(0, Math.floor(phaseAccumulator));
+        phaseAccumulator -= assignedDays;
+      }
+      totalAssigned += assignedDays;
+      result.push({ ...phaseStages[i], duration_days: assignedDays });
+    }
+  }
+  return result;
+};
+
+/**
+ * Calculate planned_start_date and planned_end_date for each stage sequentially.
+ * @param {Array} stages
+ * @param {string|Date} projectStartDate
+ * @returns {Array} stages with planned_start_date, planned_end_date set
+ */
+const assignStageDates = (stages, projectStartDate) => {
+  if (!projectStartDate) return stages;
+  let cursor = new Date(projectStartDate);
+  cursor.setHours(0, 0, 0, 0);
+  return stages.map(s => {
+    const days = parseInt(s.duration_days) || 0;
+    const start = new Date(cursor);
+    // 0-day stages: same start and end date, cursor doesn't advance
+    if (days === 0) {
+      return {
+        ...s,
+        planned_start_date: start.toISOString().split('T')[0],
+        planned_end_date:   start.toISOString().split('T')[0],
+      };
+    }
+    const end = new Date(cursor);
+    end.setDate(end.getDate() + days - 1);
+    cursor = new Date(end);
+    cursor.setDate(cursor.getDate() + 1);
+    return {
+      ...s,
+      planned_start_date: start.toISOString().split('T')[0],
+      planned_end_date:   end.toISOString().split('T')[0],
+    };
+  });
+};
 
 const getProjectKanbanColumn = (project, schedule) => {
   if (project.status === 'completed') return 'Completed';
@@ -234,20 +368,12 @@ const getProjectKanbanColumn = (project, schedule) => {
   const completedList = schedule.filter(s => s.status === 'completed');
   if (total > 0 && completedList.length === total) return 'Completed';
 
-  // Priority 1: in_progress stages dictate the column
   const inProgressStages = schedule.filter(s => s.status === 'in_progress');
   if (inProgressStages.length > 0) {
-    const isHandover = inProgressStages.some(s =>
-      s.phase === 'Handover' || s.milestone_name?.toLowerCase().includes('handover')
-    );
-    if (isHandover) return 'Handover';
     const maxSortStage = inProgressStages.reduce((a, b) => (a.sort_order > b.sort_order ? a : b));
     return PHASE_TO_COLUMN[maxSortStage.phase] || 'Execution';
   }
 
-  // Priority 2: no in_progress → find the FIRST phase (in master order) that has
-  // any non-completed stages. This correctly places the card in the phase being
-  // worked on next, even when we just bulk-completed prior phases via drag/drop.
   for (const phase of PHASE_SEQUENCE) {
     const phaseStages = schedule.filter(s => s.phase === phase);
     if (phaseStages.length > 0 && phaseStages.some(s => s.status !== 'completed')) {
@@ -255,7 +381,6 @@ const getProjectKanbanColumn = (project, schedule) => {
     }
   }
 
-  // Priority 3: all known phases done — check unknown phases by sort_order
   if (completedList.length > 0) {
     const maxSortStage = completedList.reduce((a, b) => (a.sort_order > b.sort_order ? a : b));
     return PHASE_TO_COLUMN[maxSortStage.phase] || 'Execution';
@@ -264,7 +389,6 @@ const getProjectKanbanColumn = (project, schedule) => {
   return 'Not Started';
 };
 
-// ── Project Tracker ─────────────────────────────────────────
 const getTrackerData = async (req, res) => {
   const { status, location, project_type, services_taken, team_member } = req.query;
 
@@ -346,9 +470,13 @@ const getTrackerData = async (req, res) => {
 
   // Summary counts
   const totalActive   = enriched.filter(p => p.status === 'active').length;
-  const inDesign      = enriched.filter(p => ['Estimation','3D Design','2D Drawings'].includes(p.kanban_column)).length;
-  const inExecution   = enriched.filter(p => ['Execution - Civil','Execution'].includes(p.kanban_column)).length;
-  const nearComplete  = enriched.filter(p => p.status === 'active' && p.kanban_column === 'Handover').length;
+  const inDesign      = enriched.filter(p => ['3D Design','2D Drawings','2D Detailed Drawing'].includes(p.kanban_column)).length;
+  const inExecution   = enriched.filter(p => p.kanban_column === 'Execution').length;
+  const nearComplete  = enriched.filter(p => p.status === 'active' && p.kanban_column === 'Completed' && p.progress < 100).length;
+  const delayed       = enriched.filter(p => {
+    const now = new Date(); now.setHours(0,0,0,0);
+    return p.status === 'active';
+  }).length; // placeholder — real delay computed per project in tracker page
 
   res.json({
     success: true,
@@ -402,6 +530,10 @@ const updateStage = async (req, res) => {
   );
   if (!before[0]) return res.status(404).json({ success: false, message: 'Stage not found' });
 
+  const wasBlocked = before[0].status === 'blocked';
+  const isNowBlocked = status === 'blocked';
+  const blockingChanged = isNowBlocked !== wasBlocked;
+
   const fields = ['milestone_name','phase','phase_group','sort_order','weight','status',
     'planned_start_date','planned_end_date','actual_start_date','actual_end_date',
     'assigned_to','notes','attachment_url','drive_link'];
@@ -410,6 +542,25 @@ const updateStage = async (req, res) => {
   const body = { milestone_name, phase, phase_group, sort_order, weight, status,
     planned_start_date, planned_end_date, actual_start_date, actual_end_date,
     assigned_to, notes, attachment_url, drive_link: req.body.drive_link };
+
+  // When blocking: zero out duration_days, preserve original in notes-meta
+  if (isNowBlocked && !wasBlocked) {
+    body.duration_days = 0;
+    updates.push(`duration_days = $${idx++}`); values.push(0);
+    // Store original duration so it can be restored on unblock
+    updates.push(`attachment_url = $${idx++}`);
+    values.push(before[0].attachment_url || `__orig_days:${before[0].duration_days}`);
+  }
+
+  // When unblocking: restore original duration_days if we stored it
+  if (!isNowBlocked && wasBlocked) {
+    const stored = before[0].attachment_url || '';
+    const match = stored.match(/^__orig_days:(\d+)/);
+    const origDays = match ? parseInt(match[1]) : (before[0].duration_days || 1);
+    updates.push(`duration_days = $${idx++}`); values.push(origDays);
+    // Clear the stored original if it was saved in attachment_url
+    if (match) { updates.push(`attachment_url = $${idx++}`); values.push(null); }
+  }
 
   for (const f of fields) {
     if (body[f] !== undefined) { updates.push(`${f} = $${idx++}`); values.push(body[f] ?? null); }
@@ -424,6 +575,45 @@ const updateStage = async (req, res) => {
     `UPDATE project_activity_schedule SET ${updates.join(', ')} WHERE id=$${idx} AND project_id=$${idx+1} RETURNING *`,
     values
   );
+
+  // ── Cascade date recalculation for all stages after this one ────────────
+  if (blockingChanged && rows[0]?.planned_start_date) {
+    const { rows: allStages } = await db.query(
+      `SELECT * FROM project_activity_schedule WHERE project_id=$1 ORDER BY sort_order ASC`,
+      [req.params.id]
+    );
+
+    const thisIdx = allStages.findIndex(s => s.id === req.params.sid);
+    if (thisIdx !== -1 && thisIdx < allStages.length - 1) {
+      // Build cursor from this stage's planned_start + its (new) duration
+      const thisDays = isNowBlocked ? 0 : (rows[0].duration_days || 0);
+      let cursor = new Date(rows[0].planned_start_date);
+      cursor.setHours(0, 0, 0, 0);
+      if (thisDays > 0) cursor.setDate(cursor.getDate() + thisDays);
+      // else cursor stays same day (blocked stage takes 0 days)
+
+      for (let i = thisIdx + 1; i < allStages.length; i++) {
+        const s = allStages[i];
+        const days = parseInt(s.duration_days) || 0;
+        const newStart = new Date(cursor);
+        let newEnd;
+        if (days === 0) {
+          newEnd = new Date(cursor);
+        } else {
+          newEnd = new Date(cursor);
+          newEnd.setDate(newEnd.getDate() + days - 1);
+          cursor = new Date(newEnd);
+          cursor.setDate(cursor.getDate() + 1);
+        }
+        await db.query(
+          `UPDATE project_activity_schedule
+           SET planned_start_date=$1, planned_end_date=$2, updated_at=NOW()
+           WHERE id=$3`,
+          [newStart.toISOString().split('T')[0], newEnd.toISOString().split('T')[0], s.id]
+        );
+      }
+    }
+  }
 
   await logAudit(db, {
     userId: req.user.id, userName: req.user.name,
@@ -466,14 +656,16 @@ const getStages = async (req, res) => {
   );
 
   const total = stages.length;
-  const completedCount = stages.filter(s => s.status === 'completed').length;
+  const completedCount = stages.filter(s => s.status === 'completed' || s.status === 'blocked').length;
   const hasTotalWeight = stages.some(s => s.weight && parseFloat(s.weight) !== 1);
 
   let progress = 0;
   if (total > 0) {
     if (hasTotalWeight) {
       const tw = stages.reduce((sum, s) => sum + parseFloat(s.weight || 1), 0);
-      const cw = stages.filter(s => s.status === 'completed').reduce((sum, s) => sum + parseFloat(s.weight || 1), 0);
+      const cw = stages
+        .filter(s => s.status === 'completed' || s.status === 'blocked')
+        .reduce((sum, s) => sum + parseFloat(s.weight || 1), 0);
       progress = tw > 0 ? Math.round((cw / tw) * 100) : 0;
     } else {
       progress = Math.round((completedCount / total) * 100);
@@ -481,10 +673,10 @@ const getStages = async (req, res) => {
   }
 
   res.json({ success: true, data: { stages, progress, total, completed: completedCount } });
-};
+}
 
 const applyTemplate = async (req, res) => {
-  const { template_source, template_id, project_type, clear_existing } = req.body;
+  const { template_source, template_id, clear_existing, project_start_date, target_days } = req.body;
 
   const client = await db.pool.connect();
   try {
@@ -499,46 +691,38 @@ const applyTemplate = async (req, res) => {
       [req.params.id]
     );
     let sortOffset = existing[0]?.max_so ?? 0;
-
     let insertedCount = 0;
 
-    if (template_source === 'activity' && project_type) {
-      // Resolve project_type with normalization + fallbacks
-      const resolvedType = await resolveProjectType(
-        (sql, params) => client.query(sql, params),
-        project_type
-      );
-      if (!resolvedType) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({
-          success: false,
-          message: `No template found for project type "${project_type}". Available types: 2BHK – 6BHK (Bungalow types map to nearest BHK; Commercial maps to 4BHK).`,
-        });
-      }
+    // ── Fetch universal template from stage_templates (name = 'Universal') ──
+    const { rows: universalTpl } = await client.query(
+      `SELECT id FROM stage_templates WHERE name='Universal' ORDER BY created_at ASC LIMIT 1`
+    );
 
-      const { rows: templates } = await client.query(
-        `SELECT * FROM activity_schedule_templates WHERE project_type=$1 AND is_active=true ORDER BY step_number ASC`,
-        [resolvedType]
-      );
-      if (!templates.length) {
-        await client.query('ROLLBACK');
-        return res.status(404).json({ success: false, message: `No template rows found for resolved type "${resolvedType}"` });
-      }
+    let rawStages = [];
 
-      for (const t of templates) {
-        sortOffset++;
-        await client.query(
-          `INSERT INTO project_activity_schedule
-             (project_id, template_id, activity_no, milestone_name, phase, phase_group, step_number,
-              duration_days, dependency_condition, sort_order, status, weight, created_by)
-           VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,'pending',1,$10)`,
-          [req.params.id, t.id, t.activity_no, t.milestone_name, t.phase, t.step_number,
-           t.duration_days, t.dependency_condition, sortOffset, req.user.id]
-        );
-        insertedCount++;
+    if (template_source === 'universal' || (!template_source && universalTpl.length > 0)) {
+      // Use universal template
+      const tplId = universalTpl[0]?.id;
+      if (!tplId) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Universal template not found. Please seed it first.' });
       }
+      const { rows: items } = await client.query(
+        `SELECT * FROM stage_template_items WHERE template_id=$1 ORDER BY sort_order ASC`,
+        [tplId]
+      );
+      rawStages = items.map((item, i) => ({
+        milestone_name: item.title,
+        phase: item.phase_group || null,
+        phase_group: item.phase_group || null,
+        duration_days: parseFloat(item.duration_days) || 0,
+        weight: parseFloat(item.weight) || 1,
+        activity_no: String(i + 1),
+        step_number: i + 1,
+        template_id: null,
+        dependency_condition: '',
+      }));
     } else if (template_source === 'custom' && template_id) {
-      // Use user-created stage_templates
       const { rows: items } = await client.query(
         `SELECT * FROM stage_template_items WHERE template_id=$1 ORDER BY sort_order ASC`,
         [template_id]
@@ -547,18 +731,59 @@ const applyTemplate = async (req, res) => {
         await client.query('ROLLBACK');
         return res.status(404).json({ success: false, message: 'Template has no items' });
       }
+      rawStages = items.map((item, i) => ({
+        milestone_name: item.title,
+        phase: item.phase_group || null,
+        phase_group: item.phase_group || null,
+        duration_days: parseFloat(item.duration_days) || 0,
+        weight: parseFloat(item.weight) || 1,
+        activity_no: String(i + 1),
+        step_number: i + 1,
+        template_id: null,
+        dependency_condition: '',
+      }));
+    } else {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Invalid template_source or missing template_id' });
+    }
 
-      for (const item of items) {
-        sortOffset++;
-        await client.query(
-          `INSERT INTO project_activity_schedule
-             (project_id, milestone_name, phase, phase_group, sort_order, weight, duration_days, status, created_by)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',$8)`,
-          [req.params.id, item.title, item.phase_group, item.phase_group,
-           sortOffset, item.weight || 1, item.duration_days || 0, req.user.id]
-        );
-        insertedCount++;
-      }
+    // ── Scale days if target_days provided ───────────────────────────────
+    let scaledStages = rawStages;
+    if (target_days && parseFloat(target_days) > 0) {
+      scaledStages = scaleStagesByTargetDays(rawStages, parseFloat(target_days));
+    }
+
+    // ── Assign dates if project_start_date provided ──────────────────────
+    let finalStages = scaledStages;
+    if (project_start_date) {
+      finalStages = assignStageDates(scaledStages, project_start_date);
+    }
+
+    // ── Insert all stages ────────────────────────────────────────────────
+    for (const s of finalStages) {
+      sortOffset++;
+      await client.query(
+        `INSERT INTO project_activity_schedule
+           (project_id, activity_no, milestone_name, phase, phase_group, step_number,
+            duration_days, dependency_condition, sort_order, status, weight, created_by,
+            planned_start_date, planned_end_date)
+         VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,'pending',$9,$10,$11,$12)`,
+        [
+          req.params.id,
+          s.activity_no || String(sortOffset),
+          s.milestone_name,
+          s.phase,
+          s.step_number,
+          s.duration_days,
+          s.dependency_condition || '',
+          sortOffset,
+          s.weight,
+          req.user.id,
+          s.planned_start_date || null,
+          s.planned_end_date || null,
+        ]
+      );
+      insertedCount++;
     }
 
     await client.query('COMMIT');
@@ -566,7 +791,7 @@ const applyTemplate = async (req, res) => {
     await logAudit(db, {
       userId: req.user.id, userName: req.user.name,
       action: 'TEMPLATE_APPLIED', entityType: 'project', entityId: req.params.id,
-      newData: { template_source, template_id, project_type, stages_added: insertedCount },
+      newData: { template_source, template_id, stages_added: insertedCount, target_days },
     });
 
     const { rows: stages } = await db.query(
@@ -581,6 +806,7 @@ const applyTemplate = async (req, res) => {
     client.release();
   }
 };
+
 
 const getStageTemplates = async (req, res) => {
   const { rows } = await db.query(
@@ -709,21 +935,8 @@ const importStageTemplate = async (req, res) => {
 };
 
 // ── Advance project to Kanban column (drag/drop) ─────────
-const ADVANCE_COLUMN_ORDER = [
-  'Not Started', 'Furniture Layout', 'Estimation', '3D Design',
-  '2D Drawings', 'Execution - Civil', 'Execution', 'Handover', 'Completed',
-];
-const ADVANCE_COLUMN_TO_PHASES = {
-  'Not Started':       [],
-  'Furniture Layout':  ['Furniture Layout'],
-  'Estimation':        ['Estimation'],
-  '3D Design':         ['3D Design'],
-  '2D Drawings':       ['2D Drawings'],
-  'Execution - Civil': ['Execution - Civil'],
-  'Execution':         ['Execution'],
-  'Handover':          ['Handover'],
-  'Completed':         [],
-};
+const ADVANCE_COLUMN_ORDER = KANBAN_COLUMNS;
+const ADVANCE_COLUMN_TO_PHASES = COLUMN_TO_PHASES;
 
 const advanceToColumn = async (req, res) => {
   const { target_column, direction } = req.body;

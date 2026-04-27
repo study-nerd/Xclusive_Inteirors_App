@@ -172,7 +172,7 @@ export default function ProjectDetailPage() {
 
       {/* Tab Panels */}
       {activeTab === 'overview' && <OverviewTab p={p} navigate={navigate} id={id} />}
-      {activeTab === 'stages'   && <StagesTab projectId={id} projectType={p.project_type} />}
+      {activeTab === 'stages' && <StagesTab projectId={id} projectType={p.project_type} startDate={p.start_date} endDate={p.end_date} />}
       {activeTab === 'pos'      && <POsTab pos={p.purchase_orders || []} navigate={navigate} id={id} />}
       {activeTab === 'dpr'      && <DPRTab dprs={p.dprs || []} navigate={navigate} id={id} />}
       {activeTab === 'snags'    && <SnagsTab snags={p.snags || []} navigate={navigate} id={id} />}

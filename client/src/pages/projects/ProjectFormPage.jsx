@@ -190,7 +190,13 @@ export default function ProjectFormPage() {
   const handleSubmit = (e) => {
     e.preventDefault()
     setError('')
-    mutation.mutate(form)
+    // Send null for empty date fields — backend rejects empty string ""
+    const payload = {
+      ...form,
+      start_date: form.start_date || null,
+      end_date:   form.end_date   || null,
+    }
+    mutation.mutate(payload)
   }
 
   return (

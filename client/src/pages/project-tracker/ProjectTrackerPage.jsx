@@ -15,25 +15,25 @@ import { cn } from '../../lib/utils'
 const COLUMN_ORDER = [
   'Not Started',
   'Furniture Layout',
-  'Estimation',
   '3D Design',
   '2D Drawings',
-  'Execution - Civil',
+  '2D Detailed Drawing',
+  'Selection',
+  'Customization',
   'Execution',
-  'Handover',
   'Completed',
 ]
 
 const KANBAN_COLUMNS = [
-  { id: 'Not Started',       label: 'Not Started',      color: 'bg-gray-50 border-gray-200',      dot: 'bg-gray-400',     header: 'bg-gray-100'    },
-  { id: 'Furniture Layout',  label: 'Furniture Layout',  color: 'bg-purple-50 border-purple-200',  dot: 'bg-purple-400',   header: 'bg-purple-100'  },
-  { id: 'Estimation',        label: 'Estimation',        color: 'bg-blue-50 border-blue-200',      dot: 'bg-blue-400',     header: 'bg-blue-100'    },
-  { id: '3D Design',         label: '3D Design',         color: 'bg-indigo-50 border-indigo-200',  dot: 'bg-indigo-400',   header: 'bg-indigo-100'  },
-  { id: '2D Drawings',       label: '2D Drawings',       color: 'bg-cyan-50 border-cyan-200',      dot: 'bg-cyan-400',     header: 'bg-cyan-100'    },
-  { id: 'Execution - Civil', label: 'Execution - Civil', color: 'bg-amber-50 border-amber-200',    dot: 'bg-amber-400',    header: 'bg-amber-100'   },
-  { id: 'Execution',         label: 'Execution',         color: 'bg-orange-50 border-orange-200',  dot: 'bg-orange-400',   header: 'bg-orange-100'  },
-  { id: 'Handover',          label: 'Handover',          color: 'bg-yellow-50 border-yellow-200',  dot: 'bg-yellow-500',   header: 'bg-yellow-100'  },
-  { id: 'Completed',         label: 'Completed',         color: 'bg-green-50 border-green-200',    dot: 'bg-green-400',    header: 'bg-green-100'   },
+  { id: 'Not Started',          label: 'Not Started',         color: 'bg-gray-50 border-gray-200',      dot: 'bg-gray-400',     header: 'bg-gray-100'    },
+  { id: 'Furniture Layout',     label: 'Furniture Layout',    color: 'bg-purple-50 border-purple-200',  dot: 'bg-purple-400',   header: 'bg-purple-100'  },
+  { id: '3D Design',            label: '3D Design',           color: 'bg-indigo-50 border-indigo-200',  dot: 'bg-indigo-400',   header: 'bg-indigo-100'  },
+  { id: '2D Drawings',          label: '2D Drawings',         color: 'bg-cyan-50 border-cyan-200',      dot: 'bg-cyan-400',     header: 'bg-cyan-100'    },
+  { id: '2D Detailed Drawing',  label: '2D Detailed Drawing', color: 'bg-blue-50 border-blue-200',      dot: 'bg-blue-400',     header: 'bg-blue-100'    },
+  { id: 'Selection',            label: 'Selection',           color: 'bg-amber-50 border-amber-200',    dot: 'bg-amber-400',    header: 'bg-amber-100'   },
+  { id: 'Customization',        label: 'Customization',       color: 'bg-orange-50 border-orange-200',  dot: 'bg-orange-400',   header: 'bg-orange-100'  },
+  { id: 'Execution',            label: 'Execution',           color: 'bg-red-50 border-red-200',        dot: 'bg-red-400',      header: 'bg-red-100'     },
+  { id: 'Completed',            label: 'Completed',           color: 'bg-green-50 border-green-200',    dot: 'bg-green-400',    header: 'bg-green-100'   },
 ]
 
 const PROJECT_TYPES = [
@@ -335,7 +335,7 @@ export default function ProjectTrackerPage() {
           No projects found
         </div>
       ) : view === 'kanban' ? (
-        <div className="overflow-x-auto pb-4">
+        <div className="overflow-x-auto overflow-y-hidden pb-4 scrollbar scrollbar-h-3 scrollbar-thumb-gray-400 scrollbar-track-gray-200">
           <div className="flex gap-3 min-w-max">
             {KANBAN_COLUMNS.map(col => {
               const colProjects = projects.filter(p => p.kanban_column === col.id)

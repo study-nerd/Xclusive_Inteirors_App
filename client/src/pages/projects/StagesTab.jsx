@@ -2,9 +2,10 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '../../lib/api'
 import { Button, Badge, Spinner, Modal, Input, Label, Select, Textarea } from '../../components/shared'
-import { Plus, ChevronDown, ChevronRight, Check, AlertCircle, Clock, Ban, Edit2, Trash2, Layers, RefreshCw, ExternalLink, Link2 } from 'lucide-react'
+import { Plus, ChevronDown, Check, AlertCircle, Clock, Ban, Edit2, Trash2, Layers, RefreshCw, ExternalLink, Link2, Calendar } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import useAuthStore from '../../store/authStore'
+import StandardTemplateEditorModal from './StandardTemplateEditorModal'
 
 const STATUS_CONFIG = {
   pending:     { label: 'Pending',     short: 'Pend',  icon: Clock,        color: 'text-gray-500',  bg: 'bg-gray-100'  },
@@ -20,6 +21,59 @@ const PROJECT_TYPES = [
   '2BHK','2.5BHK','3BHK','3.5BHK','4BHK','4.5BHK','5BHK','5.5BHK','6BHK',
   '3BHK_Bungalow','4BHK_Bungalow','5BHK_Bungalow','6BHK_Bungalow','6BHK_Plus_Bungalow','Commercial',
 ]
+
+// ── Date helpers ─────────────────────────────────────────────
+const today = () => {
+  const d = new Date()
+  d.setHours(0, 0, 0, 0)
+  return d
+}
+
+const parseDate = (str) => {
+  if (!str) return null
+  const d = new Date(str)
+  d.setHours(0, 0, 0, 0)
+  return isNaN(d.getTime()) ? null : d
+}
+
+const fmt = (str) => {
+  const d = parseDate(str)
+  if (!d) return null
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
+}
+
+// Returns { overdue: bool, dueSoon: bool, lagDays: number|null }
+const getDateStatus = (stage) => {
+  if (stage.status === 'completed') return { overdue: false, dueSoon: false, lagDays: null }
+  const end = parseDate(stage.planned_end_date)
+  if (!end) return { overdue: false, dueSoon: false, lagDays: null }
+  const now = today()
+  const diffMs = now - end
+  const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24))
+  if (diffDays > 0) return { overdue: true, dueSoon: false, lagDays: diffDays }
+  if (diffDays >= -3) return { overdue: false, dueSoon: true, lagDays: null }
+  return { overdue: false, dueSoon: false, lagDays: null }
+}
+
+// Auto-calculate planned dates for all stages sequentially from a start date
+const calcDates = (stages, projectStartDate) => {
+  if (!projectStartDate || !stages.length) return stages
+  let cursor = parseDate(projectStartDate)
+  if (!cursor) return stages
+  return stages.map(s => {
+    const start = new Date(cursor)
+    const days = parseInt(s.duration_days) || 1
+    const end = new Date(cursor)
+    end.setDate(end.getDate() + days - 1)
+    cursor = new Date(end)
+    cursor.setDate(cursor.getDate() + 1)
+    return {
+      ...s,
+      planned_start_date: start.toISOString().split('T')[0],
+      planned_end_date: end.toISOString().split('T')[0],
+    }
+  })
+}
 
 function ProgressBar({ value }) {
   const color = value >= 100 ? 'bg-green-500' : value >= 60 ? 'bg-orange-500' : 'bg-blue-500'
@@ -48,14 +102,43 @@ function PhaseProgress({ completed, total }) {
   )
 }
 
+function DateChip({ stage }) {
+  const start = fmt(stage.planned_start_date)
+  const end = fmt(stage.planned_end_date)
+  if (!start && !end) return null
+
+  const { overdue, dueSoon, lagDays } = getDateStatus(stage)
+  const isCompleted = stage.status === 'completed'
+
+  return (
+    <span className={cn(
+      'inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full border',
+      isCompleted
+        ? 'bg-green-50 border-green-200 text-green-700'
+        : overdue
+          ? 'bg-red-50 border-red-200 text-red-600'
+          : dueSoon
+            ? 'bg-amber-50 border-amber-200 text-amber-600'
+            : 'bg-gray-50 border-gray-200 text-gray-500'
+    )}>
+      <Calendar size={9} />
+      {start}{end && end !== start ? ` → ${end}` : ''}
+      {overdue && lagDays && (
+        <span className="font-bold">· {lagDays}d late</span>
+      )}
+    </span>
+  )
+}
+
 function StageRow({ stage, canEdit, onUpdate, onDelete }) {
   const [editOpen, setEditOpen] = useState(false)
   const isCompleted = stage.status === 'completed'
+  const { overdue } = getDateStatus(stage)
 
   return (
     <div className={cn(
       'flex items-center gap-3 py-3.5 px-5 border-b last:border-0 transition-colors group',
-      isCompleted ? 'bg-green-50/30 hover:bg-green-50/50' : 'hover:bg-gray-50/70'
+      isCompleted ? 'bg-green-50/30 hover:bg-green-50/50' : overdue ? 'bg-red-50/20 hover:bg-red-50/40' : 'hover:bg-gray-50/70'
     )}>
       {/* Circle Checkbox */}
       <button
@@ -64,7 +147,9 @@ function StageRow({ stage, canEdit, onUpdate, onDelete }) {
           'w-5 h-5 rounded-full border-2 shrink-0 flex items-center justify-center transition-all',
           isCompleted
             ? 'bg-green-500 border-green-500 text-white'
-            : 'border-gray-300 hover:border-green-400 hover:bg-green-50'
+            : overdue
+              ? 'border-red-400 hover:border-red-500 hover:bg-red-50'
+              : 'border-gray-300 hover:border-green-400 hover:bg-green-50'
         )}
         title={isCompleted ? 'Unmark completed' : 'Mark as completed'}
       >
@@ -79,16 +164,15 @@ function StageRow({ stage, canEdit, onUpdate, onDelete }) {
         )}>
           {stage.milestone_name}
         </div>
-        <div className="flex flex-wrap gap-x-3 mt-0.5 text-xs text-muted-foreground">
-          {stage.duration_days > 0 && <span className="font-medium">{stage.duration_days}d</span>}
-          {stage.assigned_to_name && <span>· {stage.assigned_to_name}</span>}
-          {stage.planned_start_date && (
-            <span>
-              · {new Date(stage.planned_start_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
-              {stage.planned_end_date && ` → ${new Date(stage.planned_end_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}`}
-            </span>
+        <div className="flex flex-wrap gap-x-2 gap-y-1 mt-1 items-center">
+          {/* duration_days hidden per UI requirement */}
+          {stage.assigned_to_name && (
+            <span className="text-xs text-muted-foreground">· {stage.assigned_to_name}</span>
           )}
-          {stage.notes && <span className="italic opacity-70">· {stage.notes}</span>}
+          <DateChip stage={stage} />
+          {stage.notes && (
+            <span className="text-xs text-muted-foreground italic opacity-70 truncate max-w-[200px]">· {stage.notes}</span>
+          )}
         </div>
       </div>
 
@@ -112,7 +196,6 @@ function StageRow({ stage, canEdit, onUpdate, onDelete }) {
           ))}
         </div>
 
-        {/* Drive link — visible and editable by all authenticated users */}
         {stage.drive_link ? (
           <a
             href={stage.drive_link}
@@ -165,6 +248,7 @@ function StageRow({ stage, canEdit, onUpdate, onDelete }) {
   )
 }
 
+// ── Stage Edit Modal with live date recalculation ────────────
 function StageEditModal({ stage, onClose, onSave }) {
   const [form, setForm] = useState({
     milestone_name: stage.milestone_name || '',
@@ -177,8 +261,27 @@ function StageEditModal({ stage, onClose, onSave }) {
     notes: stage.notes || '',
     weight: stage.weight || 1,
     drive_link: stage.drive_link || '',
+    duration_days: stage.duration_days || 0,
   })
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const set = (k, v) => {
+    setForm(f => {
+      const updated = { ...f, [k]: v }
+      // Live recalc: if start date or duration changes, recompute planned_end_date
+      if ((k === 'planned_start_date' || k === 'duration_days') && updated.planned_start_date) {
+        const start = parseDate(updated.planned_start_date)
+        const days = parseInt(updated.duration_days) || 1
+        if (start) {
+          const end = new Date(start)
+          end.setDate(end.getDate() + days - 1)
+          updated.planned_end_date = end.toISOString().split('T')[0]
+        }
+      }
+      return updated
+    })
+  }
+
+  const { overdue, lagDays } = getDateStatus({ ...stage, ...form })
 
   return (
     <Modal open onClose={onClose} title="Edit Stage">
@@ -202,10 +305,36 @@ function StageEditModal({ stage, onClose, onSave }) {
             </Select>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div><Label>Planned Start</Label><Input type="date" className="mt-1" value={form.planned_start_date} onChange={e => set('planned_start_date', e.target.value)} /></div>
-          <div><Label>Planned End</Label><Input type="date" className="mt-1" value={form.planned_end_date} onChange={e => set('planned_end_date', e.target.value)} /></div>
+
+        <div>
+          <Label>Duration (days)</Label>
+          <Input
+            type="number" min="1" className="mt-1"
+            value={form.duration_days}
+            onChange={e => set('duration_days', e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground mt-1">Changing duration auto-updates Planned End date</p>
         </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label>Planned Start</Label>
+            <Input type="date" className="mt-1" value={form.planned_start_date} onChange={e => set('planned_start_date', e.target.value)} />
+          </div>
+          <div>
+            <Label>Planned End</Label>
+            <Input type="date" className="mt-1" value={form.planned_end_date} onChange={e => set('planned_end_date', e.target.value)} />
+          </div>
+        </div>
+
+        {/* Overdue warning in modal */}
+        {overdue && lagDays && (
+          <div className="flex items-center gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
+            <AlertCircle size={13} />
+            This stage is <strong>{lagDays} day{lagDays > 1 ? 's' : ''} overdue</strong> based on planned end date.
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-3">
           <div><Label>Actual Start</Label><Input type="date" className="mt-1" value={form.actual_start_date} onChange={e => set('actual_start_date', e.target.value)} /></div>
           <div><Label>Actual End</Label><Input type="date" className="mt-1" value={form.actual_end_date} onChange={e => set('actual_end_date', e.target.value)} /></div>
@@ -240,10 +369,22 @@ function StageEditModal({ stage, onClose, onSave }) {
 
 function AddStageModal({ projectId, onClose, onAdded }) {
   const [form, setForm] = useState({
-    title: '', phase: '', planned_start_date: '', planned_end_date: '', notes: '', weight: 1,
+    title: '', phase: '', planned_start_date: '', planned_end_date: '', notes: '', weight: 1, duration_days: 0,
   })
   const [loading, setLoading] = useState(false)
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+  const set = (k, v) => setForm(f => {
+    const updated = { ...f, [k]: v }
+    if ((k === 'planned_start_date' || k === 'duration_days') && updated.planned_start_date) {
+      const start = parseDate(updated.planned_start_date)
+      const days = parseInt(updated.duration_days) || 1
+      if (start) {
+        const end = new Date(start)
+        end.setDate(end.getDate() + days - 1)
+        updated.planned_end_date = end.toISOString().split('T')[0]
+      }
+    }
+    return updated
+  })
 
   const handleSave = async () => {
     if (!form.title) return
@@ -268,6 +409,10 @@ function AddStageModal({ projectId, onClose, onAdded }) {
             {PHASES.map(p => <option key={p} value={p}>{p}</option>)}
           </Select>
         </div>
+        <div>
+          <Label>Duration (days)</Label>
+          <Input type="number" min="1" className="mt-1" value={form.duration_days} onChange={e => set('duration_days', e.target.value)} />
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <div><Label>Planned Start</Label><Input type="date" className="mt-1" value={form.planned_start_date} onChange={e => set('planned_start_date', e.target.value)} /></div>
           <div><Label>Planned End</Label><Input type="date" className="mt-1" value={form.planned_end_date} onChange={e => set('planned_end_date', e.target.value)} /></div>
@@ -284,13 +429,13 @@ function AddStageModal({ projectId, onClose, onAdded }) {
   )
 }
 
-function ApplyTemplateModal({ projectId, projectType, onClose, onApplied }) {
-  const [tab, setTab] = useState('standard')
-  const [selectedType, setSelectedType] = useState(projectType || '')
+function ApplyTemplateModal({ projectId, projectType, startDate, endDate, onClose, onApplied }) {
+  const [tab, setTab] = useState('universal')
   const [clearExisting, setClearExisting] = useState(false)
   const [applying, setApplying] = useState(false)
   const [applyError, setApplyError] = useState('')
 
+  // Custom template state
   const { data: customTemplates, refetch: refetchCustom } = useQuery({
     queryKey: ['stage-templates'],
     queryFn: () => api.get('/projects/stage-templates').then(r => r.data.data),
@@ -303,15 +448,24 @@ function ApplyTemplateModal({ projectId, projectType, onClose, onApplied }) {
   const [uploadError, setUploadError] = useState('')
   const [uploadSuccess, setUploadSuccess] = useState('')
 
+  // Day scaling: auto-calculate from end_date if available, else manual input
+  const autoTargetDays = (startDate && endDate)
+    ? Math.max(1, Math.ceil((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)))
+    : null
+
+  const [manualDays, setManualDays] = useState('')
+  const targetDays = manualDays ? parseInt(manualDays) : autoTargetDays
+
   const handleApply = async () => {
     setApplyError('')
     setApplying(true)
     try {
       await api.post(`/projects/${projectId}/stages/apply-template`, {
-        template_source: tab === 'standard' ? 'activity' : 'custom',
-        project_type: tab === 'standard' ? selectedType : undefined,
+        template_source: tab,
         template_id: tab === 'custom' ? selectedCustomId : undefined,
         clear_existing: clearExisting,
+        project_start_date: startDate || null,
+        target_days: targetDays || null,
       })
       onApplied()
       onClose()
@@ -348,15 +502,15 @@ function ApplyTemplateModal({ projectId, projectType, onClose, onApplied }) {
     }
   }
 
-  const canApply = tab === 'standard' ? !!selectedType : !!selectedCustomId
+  const canApply = tab === 'universal' ? true : (tab === 'custom' ? !!selectedCustomId : false)
 
   return (
     <Modal open onClose={onClose} title="Apply Stage Template">
       <div className="space-y-4">
         <div className="flex border-b">
           {[
-            { id: 'standard', label: 'Standard Templates' },
-            { id: 'custom',   label: 'Custom Templates'   },
+            { id: 'universal', label: 'Standard Template' },
+            { id: 'custom',    label: 'Custom Template'   },
           ].map(t => (
             <button
               key={t.id}
@@ -372,19 +526,14 @@ function ApplyTemplateModal({ projectId, projectType, onClose, onApplied }) {
           ))}
         </div>
 
-        {tab === 'standard' && (
-          <div>
-            <Label>Project Type</Label>
-            <Select className="mt-1" value={selectedType} onChange={e => setSelectedType(e.target.value)}>
-              <option value="">Select type</option>
-              {PROJECT_TYPES.map(t => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
-            </Select>
-            <p className="text-xs text-muted-foreground mt-1">
-              Bungalow types and Commercial will map to the nearest standard template automatically.
-            </p>
+        {/* Universal template info */}
+        {tab === 'universal' && (
+          <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800">
+            Applies the standard 122-stage Xclusive Interiors template covering all phases from Furniture Layout to Handover.
           </div>
         )}
 
+        {/* Custom template picker */}
         {tab === 'custom' && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
@@ -395,7 +544,7 @@ function ApplyTemplateModal({ projectId, projectType, onClose, onApplied }) {
             </div>
             <Select value={selectedCustomId} onChange={e => setSelectedCustomId(e.target.value)}>
               <option value="">Select a saved template</option>
-              {(customTemplates || []).map(t => (
+              {(customTemplates || []).filter(t => t.name !== 'Universal').map(t => (
                 <option key={t.id} value={t.id}>{t.name} ({t.item_count} stages)</option>
               ))}
             </Select>
@@ -436,6 +585,51 @@ function ApplyTemplateModal({ projectId, projectType, onClose, onApplied }) {
           </div>
         )}
 
+        {/* Date / day scaling section */}
+        <div className="border rounded-lg p-3 space-y-2 bg-gray-50">
+          <div className="text-xs font-semibold text-gray-700">Project Timeline</div>
+          {autoTargetDays ? (
+            <div className="text-xs text-green-700 bg-green-50 border border-green-200 rounded px-2 py-1.5">
+              End date set — stages will be auto-scaled to fit <strong>{autoTargetDays} days</strong>
+              {startDate && <> (from <strong>{fmt(startDate)}</strong> to <strong>{fmt(endDate)}</strong>)</>}
+            </div>
+          ) : startDate ? (
+            <div className="space-y-2">
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                No end date set. Enter target days to scale stages, or leave blank to use template durations as-is.
+              </p>
+              <div>
+                <Label className="text-xs">Target completion days (optional)</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  placeholder="e.g. 180"
+                  className="mt-1 h-8 text-sm"
+                  value={manualDays}
+                  onChange={e => setManualDays(e.target.value)}
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500">
+                No start date set. Stages will be applied without dates unless you enter target days.
+              </p>
+              <div>
+                <Label className="text-xs">Target completion days (optional)</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  placeholder="e.g. 180"
+                  className="mt-1 h-8 text-sm"
+                  value={manualDays}
+                  onChange={e => setManualDays(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
         <label className="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" checked={clearExisting} onChange={e => setClearExisting(e.target.checked)} />
           <span className="text-sm">Replace existing stages</span>
@@ -460,7 +654,7 @@ function ApplyTemplateModal({ projectId, projectType, onClose, onApplied }) {
   )
 }
 
-export default function StagesTab({ projectId, projectType }) {
+export default function StagesTab({ projectId, projectType, startDate, endDate }) {
   const { user } = useAuthStore()
   const qc = useQueryClient()
   const canEdit = ['admin', 'manager'].includes(user?.role)
@@ -510,11 +704,13 @@ export default function StagesTab({ projectId, projectType }) {
     grouped[key].push(s)
   }
 
-  // Sort phases by master order, unknowns go at bottom
   const orderedPhaseKeys = [
     ...PHASE_ORDER.filter(p => grouped[p]),
     ...Object.keys(grouped).filter(p => !PHASE_ORDER.includes(p)),
   ]
+
+  // Count overdue stages for summary
+  const overdueCount = stages.filter(s => getDateStatus(s).overdue).length
 
   const togglePhase = (phase) => setExpandedPhases(p => ({ ...p, [phase]: !p[phase] }))
 
@@ -527,7 +723,14 @@ export default function StagesTab({ projectId, projectType }) {
         <div className="flex-1">
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm font-semibold">Overall Progress</span>
-            <span className="text-sm font-bold text-orange-600">{progress}%</span>
+            <div className="flex items-center gap-2">
+              {overdueCount > 0 && (
+                <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-600 border border-red-200">
+                  {overdueCount} overdue
+                </span>
+              )}
+              <span className="text-sm font-bold text-orange-600">{progress}%</span>
+            </div>
           </div>
           <ProgressBar value={progress} />
           <div className="flex justify-between text-xs text-muted-foreground mt-1.5">
@@ -564,9 +767,11 @@ export default function StagesTab({ projectId, projectType }) {
         <div className="border rounded-xl overflow-hidden shadow-sm">
           {orderedPhaseKeys.map(phase => {
             const phaseStages = grouped[phase]
-            const pCompleted = phaseStages.filter(s => s.status === 'completed').length
+            const pCompleted = phaseStages.filter(s => s.status === 'completed' || s.status === 'blocked').length
+            const pBlocked = phaseStages.filter(s => s.status === 'blocked').length
+            const pOverdue = phaseStages.filter(s => getDateStatus(s).overdue).length
             const allDone = pCompleted === phaseStages.length
-            const isExpanded = expandedPhases[phase] !== false // default open
+            const isExpanded = expandedPhases[phase] !== false
 
             return (
               <div key={phase} className="border-b last:border-0">
@@ -574,7 +779,7 @@ export default function StagesTab({ projectId, projectType }) {
                 <div
                   className={cn(
                     'flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors select-none',
-                    allDone ? 'bg-green-50 hover:bg-green-100/70' : 'bg-gray-50 hover:bg-gray-100'
+                    allDone ? 'bg-green-50 hover:bg-green-100/70' : pOverdue > 0 ? 'bg-red-50/50 hover:bg-red-50' : 'bg-gray-50 hover:bg-gray-100'
                   )}
                   onClick={() => togglePhase(phase)}
                 >
@@ -582,27 +787,42 @@ export default function StagesTab({ projectId, projectType }) {
                     <ChevronDown size={15} className="text-gray-400" />
                   </span>
 
-                  <span className={cn('font-semibold text-sm flex-1', allDone && 'text-green-700')}>
+                  <span className={cn('font-semibold text-sm flex-1', allDone && 'text-green-700', pOverdue > 0 && !allDone && 'text-red-700')}>
                     {phase}
+                    {pOverdue > 0 && !allDone && (
+                      <span className="ml-2 text-[10px] font-medium text-red-500">({pOverdue} overdue)</span>
+                    )}
                   </span>
 
                   <div className="flex items-center gap-3" onClick={e => e.stopPropagation()}>
                     <PhaseProgress completed={pCompleted} total={phaseStages.length} />
 
                     {canEdit && (
-                      <button
-                        onClick={() => handleMarkAllPhase(phaseStages, allDone ? 'pending' : 'completed')}
-                        className={cn(
-                          'flex items-center gap-1 text-xs px-2.5 py-1 rounded-md border font-medium transition-all',
-                          allDone
-                            ? 'bg-green-100 text-green-700 border-green-200 hover:bg-green-200'
-                            : 'bg-white text-gray-500 border-gray-200 hover:bg-orange-50 hover:text-orange-600 hover:border-orange-200'
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => handleMarkAllPhase(phaseStages, allDone ? 'pending' : 'completed')}
+                          className={cn(
+                            'flex items-center gap-1 text-xs px-2.5 py-1 rounded-md border font-medium transition-all',
+                            allDone
+                              ? 'bg-green-100 text-green-700 border-green-200 hover:bg-green-200'
+                              : 'bg-white text-gray-500 border-gray-200 hover:bg-orange-50 hover:text-orange-600 hover:border-orange-200'
+                          )}
+                          title={allDone ? 'Unmark all in this phase' : 'Mark all complete'}
+                        >
+                          <Check size={11} />
+                          {allDone ? 'Undo all' : 'All done'}
+                        </button>
+                        {pBlocked < phaseStages.length && (
+                          <button
+                            onClick={() => handleMarkAllPhase(phaseStages, 'blocked')}
+                            className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-md border font-medium transition-all bg-white text-gray-400 border-gray-200 hover:bg-red-50 hover:text-red-600 hover:border-red-200"
+                            title="Block all stages in this phase"
+                          >
+                            <Ban size={11} />
+                            Block all
+                          </button>
                         )}
-                        title={allDone ? 'Unmark all in this phase' : 'Mark all complete'}
-                      >
-                        <Check size={11} />
-                        {allDone ? 'Undo all' : 'All done'}
-                      </button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -639,6 +859,8 @@ export default function StagesTab({ projectId, projectType }) {
         <ApplyTemplateModal
           projectId={projectId}
           projectType={projectType}
+          startDate={startDate}
+          endDate={endDate}
           onClose={() => setTemplateOpen(false)}
           onApplied={() => qc.invalidateQueries(['stages', projectId])}
         />
