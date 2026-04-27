@@ -308,7 +308,7 @@ export default function PODetailPage() {
                       {isApproved && (
                         <>
                           <td className="px-3 py-2 min-w-[110px]">
-                            {canSubmitReceipt && !po.receipt_submitted ? (
+                            {canSubmitReceipt && (!po.receipt_submitted || po.receipt_status === 'rejected') ? (
                               <Input
                                 type="number"
                                 min="0"
@@ -325,7 +325,7 @@ export default function PODetailPage() {
                             )}
                           </td>
                           <td className="px-3 py-2 min-w-[180px]">
-                            {canSubmitReceipt && !po.receipt_submitted ? (
+                            {canSubmitReceipt && (!po.receipt_submitted || po.receipt_status === 'rejected') ? (
                               <Input
                                 className={`h-8 text-sm ${disc ? 'border-red-300' : ''}`}
                                 value={currentSideNote}
