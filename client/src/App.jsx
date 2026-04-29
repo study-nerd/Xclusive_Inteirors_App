@@ -24,8 +24,10 @@ import ProjectTrackerPage   from './pages/project-tracker/ProjectTrackerPage'
 import InvoicesPage         from './pages/invoices/InvoicesPage'
 import SnaglistPage         from './pages/snaglist/SnaglistPage'
 import UsersPage            from './pages/users/UsersPage'
-import NotificationsPage    from './pages/notifications/NotificationsPage'
-import ProfilePage          from './pages/profile/ProfilePage'
+import NotificationsPage      from './pages/notifications/NotificationsPage'
+import ProfilePage            from './pages/profile/ProfilePage'
+import MyAttendancePage       from './pages/attendance/MyAttendancePage'
+import AttendanceAdminPage    from './pages/attendance/AttendanceAdminPage'
 
 export default function App() {
   const { fetchMe } = useAuthStore()
@@ -67,9 +69,10 @@ export default function App() {
           <Route path="/snaglist"  element={<SnaglistPage />} />
           <Route path="/users"     element={<UsersPage />} />
 
-          {/* NEW */}
-          <Route path="/notifications" element={<NotificationsPage />} />
-          <Route path="/profile"       element={<ProfilePage />} />
+          <Route path="/notifications"    element={<NotificationsPage />} />
+          <Route path="/profile"          element={<ProfilePage />} />
+          <Route path="/my-attendance"    element={<MyAttendancePage />} />
+          <Route path="/attendance-admin" element={<AttendanceAdminPage />} />
         </Route>
       </Route>
 

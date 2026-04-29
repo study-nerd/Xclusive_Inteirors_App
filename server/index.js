@@ -44,7 +44,8 @@ app.use('/api/checklist',         require('./modules/checklist/checklist.routes'
 app.use('/api/snaglist',          require('./modules/snaglist/snaglist.routes'));
 app.use('/api/activity-schedule', require('./modules/activity-schedule/activity.routes'));
 app.use('/api/invoices',          require('./modules/invoices/invoices.routes'));
-app.use('/api/notifications',     require('./modules/notifications/notifications.routes')); // NEW
+app.use('/api/notifications',     require('./modules/notifications/notifications.routes'));
+app.use('/api/attendance',        require('./modules/attendance/attendance.routes'));
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));
 
